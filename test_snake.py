@@ -221,6 +221,83 @@ class ButtonTests(unittest.TestCase):
             pygame.quit()
 
 
+class GameFlowTests(unittest.TestCase):
+    def test_single_player_opens_endless_challenge_select(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            _, single_button = game.menu_buttons[0]
+
+            game._handle_menu(VisionResult(), None, single_button.rect.center, True, now=1.0)
+
+            self.assertEqual(game.state, config.STATE_SINGLE_LEVEL_SELECT)
+            self.assertEqual(len(game.single_level_buttons), 5)
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_level_select_back_returns_to_main_menu(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_SINGLE_LEVEL_SELECT
+            _, back_button = game.single_level_select_buttons[0]
+
+            game._handle_single_level_select(
+                VisionResult(),
+                None,
+                back_button.rect.center,
+                True,
+                now=1.0,
+            )
+
+            self.assertEqual(game.state, config.STATE_MENU)
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_selecting_each_endless_challenge_starts_expected_level(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            for index, (_, button) in enumerate(game.single_level_buttons):
+                with self.subTest(index=index):
+                    game.state = config.STATE_SINGLE_LEVEL_SELECT
+                    game._handle_single_level_select(
+                        VisionResult(),
+                        None,
+                        button.rect.center,
+                        True,
+                        now=2.0,
+                    )
+
+                    self.assertEqual(game.state, config.STATE_PLAYING_SINGLE_CHALLENGE)
+                    self.assertEqual(game.active_mode_name, "single_challenge")
+                    self.assertEqual(game.single_challenge_mode.level_index, index)
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_gameover_buttons_for_endless_challenge_restart_select_and_menu(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.start_single_challenge(2, now=1.0)
+            game.state = config.STATE_GAMEOVER
+            game.active_mode_name = "single_challenge"
+
+            actions = [action for action, _ in game.gameover_buttons_for_active_mode()]
+
+            self.assertEqual(actions, ["restart", "level_select", "menu"])
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+
 class UILayoutTests(unittest.TestCase):
     def test_camera_preview_preserves_widescreen_aspect_ratio(self):
         from ui import GameUI
@@ -251,6 +328,13 @@ class UILayoutTests(unittest.TestCase):
     def test_screenshot_harness_renders_every_ui_state(self):
         from tools.capture_ui_states import REQUIRED_STATES, capture_ui_states
 
+        self.assertIn("single_level_select", REQUIRED_STATES)
+        self.assertIn("single_challenge_level_1", REQUIRED_STATES)
+        self.assertIn("single_challenge_level_3", REQUIRED_STATES)
+        self.assertIn("single_challenge_level_4", REQUIRED_STATES)
+        self.assertIn("single_challenge_level_5", REQUIRED_STATES)
+        self.assertIn("paused_single_challenge", REQUIRED_STATES)
+        self.assertIn("gameover_single_challenge", REQUIRED_STATES)
         self.assertIn("level_big_apple", REQUIRED_STATES)
         self.assertIn("level_3_moving_walls", REQUIRED_STATES)
         self.assertIn("level_4_portals", REQUIRED_STATES)
@@ -291,6 +375,30 @@ class UILayoutTests(unittest.TestCase):
                 screen.get_at((rect.left + 155, rect.centery))[:3],
                 config.COLOR_SUCCESS,
             )
+        finally:
+            pygame.quit()
+
+    def test_endless_challenge_sidebar_does_not_draw_target_progress(self):
+        from ui import GameUI
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        pygame.init()
+        try:
+            screen = pygame.Surface(config.WINDOWED_SIZE)
+            ui = GameUI(screen)
+            mode = EndlessChallengeMode(level_index=3, rng=random.Random(10))
+
+            ui.draw_sidebar(
+                VisionResult(),
+                mode,
+                "single_challenge",
+                now=5.0,
+                sensitivity_label="High x4",
+                camera_ready=False,
+            )
+
+            self.assertFalse(hasattr(mode, "target_score"))
+            self.assertFalse(hasattr(mode, "progress_ratio"))
         finally:
             pygame.quit()
 
@@ -580,6 +688,100 @@ class LevelModeTests(unittest.TestCase):
         self.assertEqual(mode.level_score, 0)
         self.assertEqual(mode.total_score, 0)
         self.assertIsNone(mode.big_food)
+
+
+class EndlessChallengeModeTests(unittest.TestCase):
+    def test_challenge_config_exposes_five_named_cards(self):
+        self.assertEqual(
+            [challenge["name"] for challenge in config.ENDLESS_CHALLENGES],
+            ["Classic", "Symmetry", "Moving Walls", "Portals", "Mixed"],
+        )
+        self.assertEqual(config.ENDLESS_CHALLENGES[0]["tags"], ("No Obstacles", "Wrap"))
+        self.assertEqual(len(config.ENDLESS_CHALLENGES), 5)
+
+    def test_endless_challenge_reuses_level_obstacles(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        level_one = EndlessChallengeMode(level_index=0, rng=random.Random(11))
+        level_three = EndlessChallengeMode(level_index=2, rng=random.Random(12))
+        level_four = EndlessChallengeMode(level_index=3, rng=random.Random(13))
+        level_five = EndlessChallengeMode(level_index=4, rng=random.Random(14))
+
+        self.assertEqual(level_one.walls, [])
+        self.assertGreaterEqual(len(level_three.moving_walls), 2)
+        self.assertGreaterEqual(len(level_four.portals), 2)
+        self.assertGreaterEqual(len(level_five.moving_walls), 2)
+        self.assertGreaterEqual(len(level_five.portals), 1)
+
+    def test_endless_challenge_wraps_boundaries_but_walls_are_deadly(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        mode = EndlessChallengeMode(level_index=1, rng=random.Random(15))
+        mode.snake.head_pos = pygame.Vector2(config.WINDOW_WIDTH + 12, -9)
+        mode.wrap_snake_head()
+
+        self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + 12)
+        self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - 9)
+
+        wall = mode.walls[0]
+        mode.snake.head_pos = pygame.Vector2(wall.rect.center)
+
+        self.assertTrue(mode.hits_wall())
+
+    def test_endless_challenge_big_food_uses_current_duration(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        mode = EndlessChallengeMode(level_index=0, rng=random.Random(16))
+        mode.normal_food.position = pygame.Vector2(mode.snake.head_pos)
+        mode.apples_eaten = config.BIG_FOOD_EVERY - 1
+
+        mode.update(VisionResult(), dt=0.0, now=10.0, sensitivity=1.0)
+
+        self.assertIsNotNone(mode.big_food)
+        self.assertEqual(mode.big_food.duration, config.BIG_FOOD_DURATION)
+
+    def test_endless_challenge_food_avoids_obstacles_and_portals(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        mode = EndlessChallengeMode(level_index=4, rng=random.Random(17))
+        blocking_rects = mode.food_blocking_rects()
+
+        self.assertTrue(
+            mode.is_safe_food_point(
+                mode.normal_food.position,
+                require_open_routes=True,
+                wall_rects=blocking_rects,
+                radius=mode.normal_food.radius,
+            )
+        )
+
+        if mode.big_food is None:
+            mode.spawn_big_food(now=5.0)
+
+        self.assertTrue(
+            mode.is_safe_food_point(
+                mode.big_food.position,
+                require_open_routes=True,
+                wall_rects=blocking_rects,
+                radius=mode.big_food.radius,
+                avoid=[mode.normal_food],
+            )
+        )
+
+    def test_endless_challenge_portal_transports_head_with_cooldown(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        mode = EndlessChallengeMode(level_index=3, rng=random.Random(18))
+        portal = mode.portals[0]
+        mode.snake.head_pos = pygame.Vector2(portal.a_center.x + 6, portal.a_center.y - 4)
+        mode.snake.target_pos = pygame.Vector2(mode.snake.head_pos)
+
+        mode.apply_portals(now=10.0)
+        first_exit = pygame.Vector2(mode.snake.head_pos)
+        mode.apply_portals(now=10.1)
+
+        self.assertEqual(first_exit, pygame.Vector2(portal.b_center.x + 6, portal.b_center.y - 4))
+        self.assertEqual(mode.snake.head_pos, first_exit)
 
 
 class SnakeEntityTests(unittest.TestCase):

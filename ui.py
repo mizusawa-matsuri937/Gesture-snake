@@ -140,6 +140,31 @@ class GameUI:
                     ),
                 )
             self.draw_snake(mode.snake)
+        elif mode_name == "single_challenge":
+            for wall in mode.moving_walls:
+                self.draw_moving_wall_track(wall)
+            for wall in mode.walls:
+                self.draw_wall(wall)
+            for wall in mode.moving_walls:
+                self.draw_moving_wall(wall)
+            for portal in mode.portals:
+                self.draw_portal_pair(portal, now)
+            self.draw_apple(mode.normal_food)
+            if mode.big_food:
+                if int(now * 8) % 2 == 0 or mode.big_food.remaining(now) > 2.0:
+                    self.draw_apple(mode.big_food, big=True)
+                remaining = self.font_small.render(
+                    f"{mode.big_food.remaining(now):.1f}s",
+                    True,
+                    config.COLOR_WARNING,
+                )
+                self.screen.blit(
+                    remaining,
+                    remaining.get_rect(
+                        center=(int(mode.big_food.position.x), int(mode.big_food.position.y) - 44)
+                    ),
+                )
+            self.draw_snake(mode.snake)
         elif mode_name == "single":
             self.draw_apple(mode.normal_food)
             if mode.big_food:
@@ -246,6 +271,9 @@ class GameUI:
         if mode_name == "level":
             self.draw_level_stat_panel(mode, y, now, sensitivity_label)
             self.draw_level_help_text()
+        elif mode_name == "single_challenge":
+            self.draw_single_challenge_stat_panel(mode, y, now, sensitivity_label)
+            self.draw_single_challenge_help_text()
         else:
             self.draw_single_stat_panel(mode, y, now, sensitivity_label)
             self.draw_single_help_text()
@@ -265,6 +293,26 @@ class GameUI:
                 config.COLOR_WARNING,
             )
             self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(126 * config.LAYOUT_SCALE)))
+
+    def draw_single_challenge_stat_panel(self, mode, y: int, now: float, sensitivity_label: str) -> None:
+        title = f"{mode.display_level_number}. {mode.challenge_name}" if mode else "Endless Challenge"
+        tags = " / ".join(mode.challenge_tags) if mode else "Select a level"
+        labels = [
+            ("Challenge", title),
+            ("Tags", tags),
+            ("Score", str(mode.score if mode else 0)),
+            ("Apples", str(mode.apples_eaten if mode else 0)),
+            ("Speed", f"{mode.current_speed if mode else config.BASE_SPEED} px/s"),
+            ("Sensitivity", sensitivity_label),
+        ]
+        self._draw_stat_box(y, labels, height=int(220 * config.LAYOUT_SCALE))
+        if mode and mode.big_food:
+            remain = self.font_tiny.render(
+                f"Big apple {mode.big_food.remaining(now):.1f}s",
+                True,
+                config.COLOR_WARNING,
+            )
+            self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(194 * config.LAYOUT_SCALE)))
 
     def draw_level_stat_panel(self, mode, y: int, now: float, sensitivity_label: str) -> None:
         margin = int(20 * config.LAYOUT_SCALE)
@@ -371,6 +419,17 @@ class GameUI:
         ]
         self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
+    def draw_single_challenge_help_text(self) -> None:
+        lines = [
+            "Endless Challenge",
+            "Obstacles are deadly",
+            "Edges still wrap",
+            "Portals move the snake head",
+            "No target bar in this mode",
+            "Peace sign: restart after Game Over",
+        ]
+        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
+
     def draw_level_help_text(self) -> None:
         lines = [
             "Level Rules",
@@ -396,6 +455,17 @@ class GameUI:
         self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.18))))
         self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.26))))
         for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_single_level_select(self, level_buttons, back_buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_title.render("Endless Challenges", True, config.COLOR_TEXT)
+        sub = self.font_med.render("Choose a map. No target bar in endless mode.", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.14))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.22))))
+        for _, button in level_buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+        for _, button in back_buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
     def draw_options(self, buttons, cursor_pos, mouse_pos, sensitivity_label: str) -> None:
@@ -429,6 +499,10 @@ class GameUI:
             subtitle = f"Reached Level {mode.display_level_number}"
             stats = f"Total Score {mode.total_score}"
             hint_text = "Restart the current level or return to menu."
+        elif mode_name == "single_challenge":
+            subtitle = f"{mode.challenge_name} Score {mode.score}"
+            stats = f"Apples {mode.apples_eaten}"
+            hint_text = "Restart, choose another challenge, or return to menu."
         else:
             subtitle = f"Score {mode.score}"
             stats = f"Apples {mode.apples_eaten}"

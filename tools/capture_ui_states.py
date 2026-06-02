@@ -21,15 +21,22 @@ REQUIRED_STATES = [
     "menu",
     "options",
     "coming_soon",
+    "single_level_select",
     "playing_single",
+    "single_challenge_level_1",
+    "single_challenge_level_3",
+    "single_challenge_level_4",
+    "single_challenge_level_5",
     "playing_level",
     "level_big_apple",
     "level_3_moving_walls",
     "level_4_portals",
     "level_5_mixed",
     "paused_single",
+    "paused_single_challenge",
     "paused_level",
     "gameover_single",
+    "gameover_single_challenge",
     "gameover_level",
     "level_clear",
 ]
@@ -48,15 +55,24 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
         "menu": lambda: _set_state(game, config.STATE_MENU, "single"),
         "options": lambda: _set_state(game, config.STATE_OPTIONS, "single"),
         "coming_soon": lambda: _set_state(game, config.STATE_COMING_SOON, "single"),
+        "single_level_select": lambda: _set_state(game, config.STATE_SINGLE_LEVEL_SELECT, "single"),
         "playing_single": lambda: _set_state(game, config.STATE_PLAYING_SINGLE, "single"),
+        "single_challenge_level_1": lambda: _set_single_challenge_stage(game, 0, now),
+        "single_challenge_level_3": lambda: _set_single_challenge_stage(game, 2, now),
+        "single_challenge_level_4": lambda: _set_single_challenge_stage(game, 3, now),
+        "single_challenge_level_5": lambda: _set_single_challenge_stage(game, 4, now),
         "playing_level": lambda: _set_playing_level(game),
         "level_big_apple": lambda: _set_level_big_apple(game, now),
         "level_3_moving_walls": lambda: _set_level_stage(game, 2, 80, 180, now),
         "level_4_portals": lambda: _set_level_stage(game, 3, 120, 300, now),
         "level_5_mixed": lambda: _set_level_stage(game, 4, 250, 620, now),
         "paused_single": lambda: _set_paused(game, config.STATE_PLAYING_SINGLE, "single"),
+        "paused_single_challenge": lambda: _set_paused(
+            game, config.STATE_PLAYING_SINGLE_CHALLENGE, "single_challenge"
+        ),
         "paused_level": lambda: _set_paused(game, config.STATE_PLAYING_LEVEL, "level"),
         "gameover_single": lambda: _set_gameover_single(game),
+        "gameover_single_challenge": lambda: _set_gameover_single_challenge(game),
         "gameover_level": lambda: _set_gameover_level(game),
         "level_clear": lambda: _set_level_clear(game),
     }
@@ -97,6 +113,16 @@ def _set_playing_level(game: Game) -> None:
     _set_level_stage(game, 0, 50, 50, 8.0)
 
 
+def _set_single_challenge_stage(game: Game, level_index: int, now: float) -> None:
+    game.single_challenge_mode.select_level(level_index, now)
+    game.single_challenge_mode.score = (level_index + 1) * 40
+    game.single_challenge_mode.apples_eaten = level_index + 2
+    game.single_challenge_mode.update_moving_walls(now)
+    game.state = config.STATE_PLAYING_SINGLE_CHALLENGE
+    game.active_mode_name = "single_challenge"
+    game.pause_reason = None
+
+
 def _set_level_stage(game: Game, level_index: int, level_score: int, total_score: int, now: float) -> None:
     game.level_mode.level_index = level_index
     game.level_mode.total_score = total_score
@@ -121,6 +147,14 @@ def _set_gameover_level(game: Game) -> None:
     game.level_mode.total_score = 180
     game.state = config.STATE_GAMEOVER
     game.active_mode_name = "level"
+
+
+def _set_gameover_single_challenge(game: Game) -> None:
+    _set_single_challenge_stage(game, 4, 8.0)
+    game.single_challenge_mode.score = 210
+    game.single_challenge_mode.apples_eaten = 15
+    game.state = config.STATE_GAMEOVER
+    game.active_mode_name = "single_challenge"
 
 
 def _set_level_clear(game: Game) -> None:

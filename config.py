@@ -56,7 +56,7 @@ BIG_GROWTH = 3
 NORMAL_FOOD_SCORE = 10
 BIG_FOOD_SCORE = 30
 BIG_FOOD_EVERY = 5
-BIG_FOOD_DURATION = 5.0
+BIG_FOOD_DURATION = 10.0
 INVINCIBLE_SECONDS = 3.0
 
 # Single-player speed
@@ -93,6 +93,8 @@ DEFAULT_SENSITIVITY_INDEX = 2
 
 STATE_MENU = "MENU"
 STATE_PLAYING_SINGLE = "PLAYING_SINGLE"
+STATE_SINGLE_LEVEL_SELECT = "SINGLE_LEVEL_SELECT"
+STATE_PLAYING_SINGLE_CHALLENGE = "PLAYING_SINGLE_CHALLENGE"
 STATE_PLAYING_LEVEL = "PLAYING_LEVEL"
 STATE_PAUSED = "PAUSED"
 STATE_GAMEOVER = "GAMEOVER"
@@ -118,10 +120,11 @@ CJK_FONTS = CJK_FONT_FILES + [
 
 # Obstacle coordinates are relative to the right-side game area.
 LEVELS = [
-    {"name": "Level 1", "target_score": 100, "walls": []},
+    {"name": "Level 1", "target_score": 100, "spawn": (525, 400), "walls": []},
     {
         "name": "Level 2",
         "target_score": 150,
+        "spawn": (525, 430),
         "walls": [
             (265, 330, 520, 36),
         ],
@@ -129,6 +132,7 @@ LEVELS = [
     {
         "name": "Level 3",
         "target_score": 200,
+        "spawn": (525, 400),
         "walls": [
             (250, 160, 550, 34),
             (250, 606, 550, 34),
@@ -141,6 +145,7 @@ LEVELS = [
     {
         "name": "Level 4",
         "target_score": 300,
+        "spawn": (525, 680),
         "walls": [
             (250, 140, 36, 500),
             (764, 140, 36, 500),
@@ -154,6 +159,7 @@ LEVELS = [
     {
         "name": "Level 5",
         "target_score": 500,
+        "spawn": (525, 730),
         "walls": [
             (180, 150, 36, 500),
             (834, 150, 36, 500),
@@ -169,6 +175,34 @@ LEVELS = [
         "portals": [
             {"a": (310, 85), "b": (740, 715), "radius": 32, "color": COLOR_PORTAL_BLUE},
         ],
+    },
+]
+
+ENDLESS_CHALLENGES = [
+    {
+        "name": "Classic",
+        "tags": ("No Obstacles", "Wrap"),
+        "level_index": 0,
+    },
+    {
+        "name": "Symmetry",
+        "tags": ("Centered Wall", "Wrap"),
+        "level_index": 1,
+    },
+    {
+        "name": "Moving Walls",
+        "tags": ("Moving Walls", "Wrap"),
+        "level_index": 2,
+    },
+    {
+        "name": "Portals",
+        "tags": ("Portals", "Wrap"),
+        "level_index": 3,
+    },
+    {
+        "name": "Mixed",
+        "tags": ("Walls", "Moving", "Portals"),
+        "level_index": 4,
     },
 ]
 

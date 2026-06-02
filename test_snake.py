@@ -1,11 +1,15 @@
 import os
 import random
+import re
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pygame
+import numpy as np
 
 import config
 from entities import Food, Snake, Wall
@@ -56,6 +60,19 @@ class FontLoadingTests(unittest.TestCase):
 
 
 class GameRuleTests(unittest.TestCase):
+    def test_display_defaults_to_fullscreen_with_windowed_fallback(self):
+        self.assertTrue(config.FULLSCREEN_DEFAULT)
+        self.assertEqual(config.WINDOWED_SIZE, (1400, 800))
+        self.assertGreaterEqual(config.MIN_LAYOUT_SCALE, 1.0)
+
+    def test_camera_defaults_to_widescreen_capture(self):
+        self.assertEqual(config.CAMERA_RESOLUTION, (1280, 720))
+
+    def test_sensitivity_labels_are_english(self):
+        labels = [label for label, _ in config.SENSITIVITY_OPTIONS]
+
+        self.assertEqual(labels, ["Normal", "Sensitive", "High", "Ultra"])
+
     def test_speed_scales_with_apples_and_caps_at_maximum(self):
         self.assertEqual(current_speed_for_apples(0), config.BASE_SPEED)
         self.assertEqual(
@@ -188,7 +205,7 @@ class ButtonTests(unittest.TestCase):
     def test_button_accepts_cursor_pinch_and_mouse_clicks(self):
         pygame.init()
         try:
-            button = Button(pygame.Rect(100, 100, 160, 60), "单人模式")
+            button = Button(pygame.Rect(100, 100, 160, 60), "Single Player")
 
             self.assertTrue(button.clicked((140, 120), pinch_clicked=True))
             self.assertFalse(button.clicked((20, 20), pinch_clicked=True))
@@ -202,6 +219,48 @@ class ButtonTests(unittest.TestCase):
             )
         finally:
             pygame.quit()
+
+
+class UILayoutTests(unittest.TestCase):
+    def test_camera_preview_preserves_widescreen_aspect_ratio(self):
+        from ui import GameUI
+
+        pygame.init()
+        try:
+            screen = pygame.Surface(config.WINDOWED_SIZE)
+            ui = GameUI(screen)
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+            ui.update_camera_surface(frame)
+
+            self.assertIsNotNone(ui.cam_surface)
+            self.assertEqual(ui.cam_surface.get_size(), (310, 174))
+            self.assertEqual(ui.camera_preview_rect.size, (310, 174))
+        finally:
+            pygame.quit()
+
+    def test_visible_game_ui_source_is_english_only(self):
+        chinese = re.compile(r"[\u4e00-\u9fff]")
+        source_files = ["config.py", "game.py", "ui.py", "vision.py"]
+
+        for path in source_files:
+            with self.subTest(path=path):
+                text = Path(path).read_text(encoding="utf-8")
+                self.assertIsNone(chinese.search(text))
+
+    def test_screenshot_harness_renders_every_ui_state(self):
+        from tools.capture_ui_states import REQUIRED_STATES, capture_ui_states
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            captures = capture_ui_states(output_dir)
+
+            self.assertEqual(set(captures), set(REQUIRED_STATES))
+            for state, path in captures.items():
+                with self.subTest(state=state):
+                    self.assertTrue(path.exists())
+                    image = pygame.image.load(str(path))
+                    self.assertEqual(image.get_size(), config.WINDOWED_SIZE)
 
 
 class GestureDebouncerTests(unittest.TestCase):

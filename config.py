@@ -2,14 +2,21 @@ from __future__ import annotations
 
 
 # Window layout
-WINDOW_WIDTH = 1400
-WINDOW_HEIGHT = 800
-SIDEBAR_WIDTH = 350
+WINDOWED_SIZE = (1400, 800)
+FULLSCREEN_DEFAULT = True
+MIN_LAYOUT_SCALE = 1.0
+BASE_WINDOW_WIDTH = 1400
+BASE_WINDOW_HEIGHT = 800
+BASE_SIDEBAR_WIDTH = 350
+WINDOW_WIDTH = WINDOWED_SIZE[0]
+WINDOW_HEIGHT = WINDOWED_SIZE[1]
+SIDEBAR_WIDTH = BASE_SIDEBAR_WIDTH
 GAME_WIDTH = WINDOW_WIDTH - SIDEBAR_WIDTH
+LAYOUT_SCALE = 1.0
 
 # Camera settings
 CAMERA_INDEX = 0
-CAMERA_RESOLUTION = (640, 480)
+CAMERA_RESOLUTION = (1280, 720)
 CAMERA_WIDTH = CAMERA_RESOLUTION[0]
 CAMERA_HEIGHT = CAMERA_RESOLUTION[1]
 CAMERA_FPS = 30
@@ -72,10 +79,10 @@ ACTIVE_HAND_MAX_DISTANCE = 0.28
 
 # Pointer sensitivity scales hand movement around the camera center.
 SENSITIVITY_OPTIONS = [
-    ("标准", 1.0),
-    ("灵敏", 3.0),
-    ("高灵敏", 4.0),
-    ("超高", 6.0),
+    ("Normal", 1.0),
+    ("Sensitive", 3.0),
+    ("High", 4.0),
+    ("Ultra", 6.0),
 ]
 DEFAULT_SENSITIVITY_INDEX = 2
 
@@ -144,3 +151,17 @@ LEVELS = [
         ],
     },
 ]
+
+
+def configure_layout(size: tuple[int, int]) -> None:
+    global WINDOW_WIDTH, WINDOW_HEIGHT, SIDEBAR_WIDTH, GAME_WIDTH, LAYOUT_SCALE
+
+    width = max(int(size[0]), WINDOWED_SIZE[0])
+    height = max(int(size[1]), WINDOWED_SIZE[1])
+    scale_x = width / BASE_WINDOW_WIDTH
+    scale_y = height / BASE_WINDOW_HEIGHT
+    LAYOUT_SCALE = max(MIN_LAYOUT_SCALE, min(scale_x, scale_y))
+    WINDOW_WIDTH = width
+    WINDOW_HEIGHT = height
+    SIDEBAR_WIDTH = max(BASE_SIDEBAR_WIDTH, int(BASE_SIDEBAR_WIDTH * LAYOUT_SCALE))
+    GAME_WIDTH = WINDOW_WIDTH - SIDEBAR_WIDTH

@@ -63,14 +63,16 @@ class Button:
 class GameUI:
     def __init__(self, screen: pygame.Surface):
         self.screen = screen
-        self.font_title = load_font(config.CJK_FONTS, 64, bold=True)
-        self.font_big = load_font(config.CJK_FONTS, 48, bold=True)
-        self.font_med = load_font(config.CJK_FONTS, 28, bold=True)
-        self.font_button = load_font(config.CJK_FONTS, 26, bold=True)
-        self.font_small = load_font(config.CJK_FONTS, 18)
-        self.font_tiny = load_font(config.CJK_FONTS, 15)
+        scale = min(config.LAYOUT_SCALE, 1.35)
+        self.font_title = load_font(config.CJK_FONTS, int(64 * scale), bold=True)
+        self.font_big = load_font(config.CJK_FONTS, int(46 * scale), bold=True)
+        self.font_med = load_font(config.CJK_FONTS, int(26 * scale), bold=True)
+        self.font_button = load_font(config.CJK_FONTS, int(25 * scale), bold=True)
+        self.font_small = load_font(config.CJK_FONTS, int(18 * scale))
+        self.font_tiny = load_font(config.CJK_FONTS, int(15 * scale))
         self.background = self._build_background()
         self.cam_surface: Optional[pygame.Surface] = None
+        self.camera_preview_rect = pygame.Rect(20, 20, config.SIDEBAR_WIDTH - 40, 0)
 
     def _build_background(self) -> pygame.Surface:
         surface = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
@@ -95,12 +97,22 @@ class GameUI:
         if frame is None:
             return
         h, w, _ = frame.shape
-        dim = min(h, w)
-        cx, cy = w // 2, h // 2
-        crop = frame[cy - dim // 2 : cy + dim // 2, cx - dim // 2 : cx + dim // 2]
-        crop = cv2.resize(crop, (config.SIDEBAR_WIDTH - 40, config.SIDEBAR_WIDTH - 40))
-        crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        panel = self.camera_panel_rect()
+        preview_w = panel.width
+        preview_h = max(1, round(panel.width * h / w))
+        if preview_h > panel.height:
+            preview_h = panel.height
+            preview_w = max(1, round(panel.height * w / h))
+        resized = cv2.resize(frame, (preview_w, preview_h))
+        crop_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         self.cam_surface = pygame.surfarray.make_surface(np.transpose(crop_rgb, (1, 0, 2)))
+        self.camera_preview_rect = self.cam_surface.get_rect(center=panel.center)
+
+    def camera_panel_rect(self) -> pygame.Rect:
+        margin = int(20 * config.LAYOUT_SCALE)
+        panel_width = config.SIDEBAR_WIDTH - margin * 2
+        panel_height = int(panel_width * 9 / 16)
+        return pygame.Rect(margin, margin, panel_width, panel_height)
 
     def draw_world(self, mode, mode_name: str, now: float) -> None:
         if mode_name == "level":
@@ -171,25 +183,25 @@ class GameUI:
         sensitivity_label: str,
         camera_ready: bool,
     ) -> None:
-        margin = 20
-        cam_size = config.SIDEBAR_WIDTH - 40
-        pygame.draw.rect(self.screen, (0, 0, 0), (margin, margin, cam_size, cam_size))
+        margin = int(20 * config.LAYOUT_SCALE)
+        panel = self.camera_panel_rect()
+        pygame.draw.rect(self.screen, (0, 0, 0), panel)
         if self.cam_surface:
-            self.screen.blit(self.cam_surface, (margin, margin))
+            self.screen.blit(self.cam_surface, self.camera_preview_rect)
         else:
-            msg = "摄像头未打开" if not camera_ready else "等待画面..."
+            msg = "Camera offline" if not camera_ready else "Waiting for camera..."
             text = self.font_med.render(msg, True, config.COLOR_DANGER)
-            self.screen.blit(text, text.get_rect(center=(config.SIDEBAR_WIDTH // 2, margin + cam_size // 2)))
+            self.screen.blit(text, text.get_rect(center=panel.center))
 
         border_color = config.COLOR_SUCCESS if result.detected else config.COLOR_DANGER
-        pygame.draw.rect(self.screen, border_color, (margin, margin, cam_size, cam_size), 3)
+        pygame.draw.rect(self.screen, border_color, panel, 3)
 
-        status = "已锁定第一只手" if result.detected else "等待识别手势"
+        status = "Hand locked" if result.detected else "Waiting for hand"
         status_color = config.COLOR_SUCCESS if result.detected else config.COLOR_WARNING
         status_text = self.font_small.render(status, True, status_color)
-        self.screen.blit(status_text, (margin, margin + cam_size + 12))
+        self.screen.blit(status_text, (margin, panel.bottom + int(12 * config.LAYOUT_SCALE)))
 
-        y = margin + cam_size + 46
+        y = panel.bottom + int(46 * config.LAYOUT_SCALE)
         if mode_name == "level":
             self.draw_level_stat_panel(mode, y, sensitivity_label)
             self.draw_level_help_text()
@@ -199,33 +211,34 @@ class GameUI:
 
     def draw_single_stat_panel(self, mode, y: int, now: float, sensitivity_label: str) -> None:
         labels = [
-            ("分数", str(mode.score if mode else 0)),
-            ("苹果", str(mode.apples_eaten if mode else 0)),
-            ("速度", f"{mode.current_speed if mode else config.BASE_SPEED} px/s"),
-            ("灵敏度", sensitivity_label),
+            ("Score", str(mode.score if mode else 0)),
+            ("Apples", str(mode.apples_eaten if mode else 0)),
+            ("Speed", f"{mode.current_speed if mode else config.BASE_SPEED} px/s"),
+            ("Sensitivity", sensitivity_label),
         ]
         self._draw_stat_box(y, labels)
         if mode and mode.big_food:
             remain = self.font_tiny.render(
-                f"大苹果剩余 {mode.big_food.remaining(now):.1f} 秒",
+                f"Big apple {mode.big_food.remaining(now):.1f}s",
                 True,
                 config.COLOR_WARNING,
             )
-            self.screen.blit(remain, (38, y + 126))
+            self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(126 * config.LAYOUT_SCALE)))
 
     def draw_level_stat_panel(self, mode, y: int, sensitivity_label: str) -> None:
         labels = [
-            ("关卡", f"{mode.display_level_number} / {len(mode.levels)}"),
-            ("本关", str(mode.level_score)),
-            ("总分", str(mode.total_score)),
-            ("目标", str(mode.target_score)),
-            ("速度", f"{mode.current_speed} px/s"),
-            ("灵敏度", sensitivity_label),
+            ("Level", f"{mode.display_level_number} / {len(mode.levels)}"),
+            ("Stage Score", str(mode.level_score)),
+            ("Total Score", str(mode.total_score)),
+            ("Target", str(mode.target_score)),
+            ("Speed", f"{mode.current_speed} px/s"),
+            ("Sensitivity", sensitivity_label),
         ]
-        self._draw_stat_box(y, labels, height=202)
+        self._draw_stat_box(y, labels, height=int(210 * config.LAYOUT_SCALE))
 
     def _draw_stat_box(self, y: int, labels: list[tuple[str, str]], height: int = 150) -> None:
-        margin = 20
+        margin = int(20 * config.LAYOUT_SCALE)
+        row_gap = int(31 * config.LAYOUT_SCALE)
         pygame.draw.rect(
             self.screen,
             config.COLOR_PANEL,
@@ -233,111 +246,128 @@ class GameUI:
             border_radius=8,
         )
         for i, (label, value) in enumerate(labels):
-            base_y = y + 12 + i * 30
+            base_y = y + int(12 * config.LAYOUT_SCALE) + i * row_gap
             ltxt = self.font_small.render(label, True, config.COLOR_TEXT_MUTED)
             vtxt = self.font_small.render(value, True, config.COLOR_ACCENT)
-            self.screen.blit(ltxt, (margin + 18, base_y))
-            self.screen.blit(vtxt, (margin + 108, base_y))
+            self.screen.blit(ltxt, (margin + int(18 * config.LAYOUT_SCALE), base_y))
+            self.screen.blit(vtxt, (margin + int(132 * config.LAYOUT_SCALE), base_y))
 
     def draw_single_help_text(self) -> None:
         lines = [
-            "玩法提示",
-            "食指移动：平滑追随",
-            "捏合：点击按钮",
-            "和平手势：结束后重开",
-            "撞墙会从另一侧穿出",
-            "只撞到自己才结束",
+            "Rules",
+            "Index finger: steer target",
+            "Pinch: click buttons",
+            "Peace sign: restart after Game Over",
+            "Walls wrap around in endless mode",
+            "Only body collision ends the run",
         ]
-        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - 175)
+        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
     def draw_level_help_text(self) -> None:
         lines = [
-            "闯关规则",
-            "食指移动：平滑追随",
-            "撞墙/边界/身体会失败",
-            "达到目标分数进入下一关",
-            "苹果不会生成在墙内",
-            "明显死路不会刷苹果",
+            "Level Rules",
+            "Index finger: steer target",
+            "Wall, edge, or body collision fails",
+            "Reach the target to advance",
+            "Apples avoid walls and body",
+            "Dead-end apple spots are skipped",
         ]
-        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - 175)
+        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
     def _draw_help_lines(self, lines: list[str], y: int) -> None:
         for i, line in enumerate(lines):
             font = self.font_small if i else self.font_med
             color = config.COLOR_TEXT if i == 0 else config.COLOR_TEXT_MUTED
             text = font.render(line, True, color)
-            self.screen.blit(text, (20, y + i * 26))
+            self.screen.blit(text, (int(20 * config.LAYOUT_SCALE), y + i * int(26 * config.LAYOUT_SCALE)))
 
     def draw_menu(self, buttons, cursor_pos, mouse_pos) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         title = self.font_title.render("Gesture Snake", True, config.COLOR_TEXT)
-        sub = self.font_med.render("选择模式", True, config.COLOR_TEXT_MUTED)
-        self.screen.blit(title, title.get_rect(center=(center_x, 145)))
-        self.screen.blit(sub, sub.get_rect(center=(center_x, 205)))
+        sub = self.font_med.render("Choose a Mode", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.18))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.26))))
         for _, button in buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
     def draw_options(self, buttons, cursor_pos, mouse_pos, sensitivity_label: str) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
-        title = self.font_big.render("选项设置", True, config.COLOR_TEXT)
-        subtitle = self.font_med.render("手势灵敏度", True, config.COLOR_TEXT_MUTED)
+        title = self.font_big.render("Options", True, config.COLOR_TEXT)
+        subtitle = self.font_med.render("Gesture Sensitivity", True, config.COLOR_TEXT_MUTED)
         current = self.font_title.render(sensitivity_label, True, config.COLOR_ACCENT)
         hint_lines = [
-            "灵敏度越高，手指小范围移动就能覆盖更大的地图范围。",
-            "超高灵敏度适合手不想离开摄像头中心区域的玩法。",
+            "Higher sensitivity covers more map with less hand movement.",
+            "Use High or Ultra if your hand often leaves the camera frame.",
         ]
 
-        self.screen.blit(title, title.get_rect(center=(center_x, 165)))
-        self.screen.blit(subtitle, subtitle.get_rect(center=(center_x, 235)))
-        self.screen.blit(current, current.get_rect(center=(center_x, 330)))
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.18))))
+        self.screen.blit(subtitle, subtitle.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.28))))
+        self.screen.blit(current, current.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.40))))
         for i, line in enumerate(hint_lines):
             text = self.font_small.render(line, True, config.COLOR_TEXT_MUTED)
-            self.screen.blit(text, text.get_rect(center=(center_x, 485 + i * 28)))
+            self.screen.blit(text, text.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.62) + i * int(28 * config.LAYOUT_SCALE))))
         for _, button in buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
     def draw_pause(self) -> None:
-        self.draw_overlay_panel("追踪丢失", "重新识别到手后会自动继续", config.COLOR_WARNING)
+        self.draw_overlay_panel(
+            "Tracking Lost",
+            ["Show your hand to resume automatically."],
+            config.COLOR_WARNING,
+        )
 
     def draw_gameover(self, buttons, cursor_pos, mouse_pos, mode_name: str, mode) -> None:
         if mode_name == "level":
-            subtitle = f"到达关卡 {mode.display_level_number} / 总分 {mode.total_score}"
-            hint_text = "重新开始当前关或返回菜单"
+            subtitle = f"Reached Level {mode.display_level_number}"
+            stats = f"Total Score {mode.total_score}"
+            hint_text = "Restart the current level or return to menu."
         else:
-            subtitle = f"分数 {mode.score} / 苹果 {mode.apples_eaten}"
-            hint_text = "做和平手势可直接重开"
-        self.draw_overlay_panel("游戏结束", subtitle, config.COLOR_DANGER)
-        hint = self.font_small.render(hint_text, True, config.COLOR_TEXT_MUTED)
+            subtitle = f"Score {mode.score}"
+            stats = f"Apples {mode.apples_eaten}"
+            hint_text = "Use the peace sign or press Restart."
+        self.draw_overlay_panel("Game Over", [subtitle, stats, hint_text], config.COLOR_DANGER)
+        hint = self.font_small.render("", True, config.COLOR_TEXT_MUTED)
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
-        self.screen.blit(hint, hint.get_rect(center=(center_x, 365)))
+        self.screen.blit(hint, hint.get_rect(center=(center_x, 0)))
         for _, button in buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
     def draw_level_clear(self, mode) -> None:
-        subtitle = f"关卡 {mode.display_level_number} 完成 / 总分 {mode.total_score}"
-        self.draw_overlay_panel("关卡完成", subtitle, config.COLOR_SUCCESS)
-        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
-        hint = self.font_small.render("即将进入下一关...", True, config.COLOR_TEXT_MUTED)
-        self.screen.blit(hint, hint.get_rect(center=(center_x, 365)))
+        self.draw_overlay_panel(
+            "Level Clear",
+            [
+                f"Level {mode.display_level_number} Complete",
+                f"Stage Score {mode.level_score}",
+                f"Total Score {mode.total_score}",
+                "Next level starts automatically...",
+            ],
+            config.COLOR_SUCCESS,
+        )
 
     def draw_coming_soon(self, buttons, cursor_pos, mouse_pos) -> None:
-        self.draw_overlay_panel("开发中", "Coming Soon", config.COLOR_WARNING)
+        self.draw_overlay_panel("Coming Soon", ["This mode is still in development."], config.COLOR_WARNING)
         for _, button in buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
-    def draw_overlay_panel(self, title: str, subtitle: str, color: tuple[int, int, int]) -> None:
+    def draw_overlay_panel(self, title: str, lines: list[str], color: tuple[int, int, int]) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         center_y = config.WINDOW_HEIGHT // 2
-        box = pygame.Rect(0, 0, 560, 260)
-        box.center = (center_x, center_y - 40)
+        box_w = min(int(720 * config.LAYOUT_SCALE), config.GAME_WIDTH - int(120 * config.LAYOUT_SCALE))
+        box_h = min(int(330 * config.LAYOUT_SCALE), config.WINDOW_HEIGHT - int(120 * config.LAYOUT_SCALE))
+        box = pygame.Rect(0, 0, box_w, box_h)
+        box.center = (center_x, int(config.WINDOW_HEIGHT * 0.43))
         overlay = pygame.Surface(box.size, pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 215))
+        overlay.fill((0, 0, 0, 255))
         self.screen.blit(overlay, box.topleft)
         pygame.draw.rect(self.screen, color, box, 2, border_radius=8)
         title_surf = self.font_big.render(title, True, color)
-        sub_surf = self.font_med.render(subtitle, True, config.COLOR_TEXT_MUTED)
-        self.screen.blit(title_surf, title_surf.get_rect(center=(center_x, box.y + 78)))
-        self.screen.blit(sub_surf, sub_surf.get_rect(center=(center_x, box.y + 130)))
+        self.screen.blit(title_surf, title_surf.get_rect(center=(center_x, box.y + int(70 * config.LAYOUT_SCALE))))
+        for i, line in enumerate(lines):
+            font = self.font_med if i == 0 else self.font_small
+            line_color = config.COLOR_TEXT if i == 0 else config.COLOR_TEXT_MUTED
+            surf = font.render(line, True, line_color)
+            y = box.y + int(132 * config.LAYOUT_SCALE) + i * int(34 * config.LAYOUT_SCALE)
+            self.screen.blit(surf, surf.get_rect(center=(center_x, y)))
 
     def draw_small_notice(self, text: str) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2

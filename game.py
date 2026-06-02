@@ -13,13 +13,33 @@ from utils import next_sensitivity_index, norm_to_window
 from vision import VisionResult, VisionSystem, should_pause_for_tracking
 
 
+class NullVisionSystem:
+    camera_ready = False
+
+    def update(self, now: float) -> VisionResult:
+        return VisionResult()
+
+    def seconds_since_seen(self, now: float) -> float:
+        return now
+
+    def release(self) -> None:
+        return None
+
+
 class Game:
-    def __init__(self):
+    def __init__(
+        self,
+        fullscreen: Optional[bool] = None,
+        windowed_size: tuple[int, int] = config.WINDOWED_SIZE,
+        use_camera: bool = True,
+    ):
         pygame.init()
         pygame.display.set_caption("Gesture Snake")
-        self.screen = pygame.display.set_mode((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
+        self.fullscreen = config.FULLSCREEN_DEFAULT if fullscreen is None else fullscreen
+        self.windowed_size = windowed_size
+        self.screen = self._create_display(self.fullscreen)
         self.clock = pygame.time.Clock()
-        self.vision = VisionSystem()
+        self.vision = VisionSystem() if use_camera else NullVisionSystem()
         self.ui = GameUI(self.screen)
 
         self.state = config.STATE_MENU
@@ -38,39 +58,62 @@ class Game:
         self.coming_soon_buttons: list[tuple[str, Button]] = []
         self._create_buttons()
 
+    def _create_display(self, fullscreen: bool) -> pygame.Surface:
+        flags = pygame.FULLSCREEN if fullscreen else 0
+        size = (0, 0) if fullscreen else self.windowed_size
+        screen = pygame.display.set_mode(size, flags)
+        actual_size = screen.get_size()
+        if actual_size[0] < config.WINDOWED_SIZE[0] or actual_size[1] < config.WINDOWED_SIZE[1]:
+            screen = pygame.display.set_mode(config.WINDOWED_SIZE)
+            self.fullscreen = False
+            actual_size = screen.get_size()
+        config.configure_layout(actual_size)
+        return screen
+
+    def toggle_fullscreen(self) -> None:
+        self.fullscreen = not self.fullscreen
+        self.screen = self._create_display(self.fullscreen)
+        self.ui = GameUI(self.screen)
+        self._create_buttons()
+
     def _create_buttons(self) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
-        w, h = 320, 74
+        scale = config.LAYOUT_SCALE
+        w, h = int(340 * scale), int(76 * scale)
+        gap = int(16 * scale)
+        menu_start = int(config.WINDOW_HEIGHT * 0.34)
         self.menu_buttons = [
-            ("single", Button(pygame.Rect(center_x - w // 2, 270, w, h), "单人模式", "Endless")),
-            ("level", Button(pygame.Rect(center_x - w // 2, 356, w, h), "闯关模式", "Levels")),
-            ("options", Button(pygame.Rect(center_x - w // 2, 442, w, h), "选项设置", "灵敏度")),
+            ("single", Button(pygame.Rect(center_x - w // 2, menu_start, w, h), "Single Player", "Endless")),
+            ("level", Button(pygame.Rect(center_x - w // 2, menu_start + (h + gap), w, h), "Level Mode", "Stages")),
+            ("options", Button(pygame.Rect(center_x - w // 2, menu_start + 2 * (h + gap), w, h), "Options", "Sensitivity")),
             (
                 "duo",
                 Button(
-                    pygame.Rect(center_x - w // 2, 528, w, h),
-                    "双人模式",
-                    "开发中 / Coming Soon",
+                    pygame.Rect(center_x - w // 2, menu_start + 3 * (h + gap), w, h),
+                    "Duo Mode",
+                    "Coming Soon",
                     config.COLOR_WARNING,
                 ),
             ),
         ]
+        option_y = int(config.WINDOW_HEIGHT * 0.50)
         self.options_buttons = [
-            ("sensitivity_down", Button(pygame.Rect(center_x - 250, 400, 110, 64), "降低")),
-            ("sensitivity_up", Button(pygame.Rect(center_x + 140, 400, 110, 64), "提高")),
-            ("menu", Button(pygame.Rect(center_x - w // 2, 540, w, h), "返回菜单")),
+            ("sensitivity_down", Button(pygame.Rect(center_x - int(250 * scale), option_y, int(130 * scale), int(64 * scale)), "Lower")),
+            ("sensitivity_up", Button(pygame.Rect(center_x + int(120 * scale), option_y, int(130 * scale), int(64 * scale)), "Higher")),
+            ("menu", Button(pygame.Rect(center_x - w // 2, option_y + int(150 * scale), w, h), "Back to Menu")),
         ]
+        overlay_button_y = int(config.WINDOW_HEIGHT * 0.66)
         self.pause_buttons = [
-            ("resume", Button(pygame.Rect(center_x - w // 2, 330, w, h), "继续游戏")),
-            ("restart", Button(pygame.Rect(center_x - w // 2, 422, w, h), "重新开始")),
-            ("menu", Button(pygame.Rect(center_x - w // 2, 514, w, h), "返回菜单")),
+            ("resume", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Resume")),
+            ("restart", Button(pygame.Rect(center_x - w // 2, overlay_button_y + (h + gap), w, h), "Restart")),
+            ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y + 2 * (h + gap), w, h), "Back to Menu")),
         ]
         self.gameover_buttons = [
-            ("restart", Button(pygame.Rect(center_x - w // 2, 410, w, h), "Restart Level")),
-            ("menu", Button(pygame.Rect(center_x - w // 2, 502, w, h), "Back to Menu")),
+            ("restart", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Restart")),
+            ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y + (h + gap), w, h), "Back to Menu")),
         ]
         self.coming_soon_buttons = [
-            ("menu", Button(pygame.Rect(center_x - w // 2, 500, w, h), "返回菜单")),
+            ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Back to Menu")),
         ]
 
     @property
@@ -99,6 +142,8 @@ class Game:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mouse_clicked = True
 
@@ -342,9 +387,9 @@ class Game:
         elif self.state == config.STATE_LEVEL_CLEAR:
             self.ui.draw_level_clear(self.level_mode)
         elif self.state == config.STATE_PLAYING_SINGLE and now < self.single_mode.invincible_until:
-            self.ui.draw_small_notice("开局保护中...")
+            self.ui.draw_small_notice("Spawn protection...")
         elif self.state == config.STATE_PLAYING_LEVEL and now < self.level_mode.invincible_until:
-            self.ui.draw_small_notice("开局保护中...")
+            self.ui.draw_small_notice("Spawn protection...")
 
         if cursor_pos:
             pygame.draw.circle(self.screen, config.COLOR_ACCENT, cursor_pos, 9)

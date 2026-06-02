@@ -82,16 +82,18 @@ class VisionSystem:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_settings.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_settings.height)
             self.cap.set(cv2.CAP_PROP_FPS, camera_settings.fps)
+            if hasattr(cv2, "CAP_PROP_ZOOM"):
+                self.cap.set(cv2.CAP_PROP_ZOOM, 0)
         else:
-            print("摄像头无法打开：请检查摄像头权限、设备连接或尝试更换摄像头索引。")
+            print("Camera unavailable. Check camera permissions, device connection, or camera index.")
 
         self.mp_hands = None
         self.drawer = None
         self.hands = None
         if not hasattr(mp, "solutions") or not hasattr(mp.solutions, "hands"):
             print(
-                "MediaPipe Hands API 不可用：请使用项目 .venv 的 Python 3.10，"
-                "或安装支持 mp.solutions.hands 的 mediapipe 版本。"
+                "MediaPipe Hands API is unavailable. Use the project Python 3.10 .venv "
+                "or install a mediapipe version that supports mp.solutions.hands."
             )
         else:
             self.mp_hands = mp.solutions.hands

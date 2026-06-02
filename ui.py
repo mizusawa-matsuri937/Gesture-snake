@@ -226,15 +226,75 @@ class GameUI:
             self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(126 * config.LAYOUT_SCALE)))
 
     def draw_level_stat_panel(self, mode, y: int, sensitivity_label: str) -> None:
-        labels = [
-            ("Level", f"{mode.display_level_number} / {len(mode.levels)}"),
-            ("Stage Score", str(mode.level_score)),
+        margin = int(20 * config.LAYOUT_SCALE)
+        panel_width = config.SIDEBAR_WIDTH - 40
+        panel_height = int(246 * config.LAYOUT_SCALE)
+        row_gap = int(31 * config.LAYOUT_SCALE)
+        panel = pygame.Rect(margin, y, panel_width, panel_height)
+        pygame.draw.rect(self.screen, config.COLOR_PANEL, panel, border_radius=8)
+
+        self._draw_stat_row(
+            panel,
+            y + int(12 * config.LAYOUT_SCALE),
+            "Level",
+            f"{mode.display_level_number} / {len(mode.levels)}",
+        )
+        self._draw_stat_row(
+            panel,
+            y + int(12 * config.LAYOUT_SCALE) + row_gap,
+            "Stage Score",
+            f"{mode.level_score} / {mode.target_score}",
+        )
+
+        label_y = y + int(78 * config.LAYOUT_SCALE)
+        progress_label = self.font_tiny.render("Target Progress", True, config.COLOR_TEXT_MUTED)
+        percent_label = self.font_tiny.render(
+            f"{int(mode.progress_ratio * 100)}%",
+            True,
+            config.COLOR_SUCCESS,
+        )
+        self.screen.blit(progress_label, (panel.x + int(18 * config.LAYOUT_SCALE), label_y))
+        self.screen.blit(
+            percent_label,
+            percent_label.get_rect(
+                topright=(panel.right - int(18 * config.LAYOUT_SCALE), label_y)
+            ),
+        )
+
+        bar_rect = pygame.Rect(
+            panel.x + int(18 * config.LAYOUT_SCALE),
+            y + int(105 * config.LAYOUT_SCALE),
+            panel.width - int(36 * config.LAYOUT_SCALE),
+            int(18 * config.LAYOUT_SCALE),
+        )
+        self.draw_target_progress_bar(mode, bar_rect)
+
+        lower_y = y + int(141 * config.LAYOUT_SCALE)
+        lower_labels = [
             ("Total Score", str(mode.total_score)),
-            ("Target", str(mode.target_score)),
             ("Speed", f"{mode.current_speed} px/s"),
             ("Sensitivity", sensitivity_label),
         ]
-        self._draw_stat_box(y, labels, height=int(210 * config.LAYOUT_SCALE))
+        for i, (label, value) in enumerate(lower_labels):
+            self._draw_stat_row(panel, lower_y + i * row_gap, label, value)
+
+    def _draw_stat_row(self, panel: pygame.Rect, y: int, label: str, value: str) -> None:
+        ltxt = self.font_small.render(label, True, config.COLOR_TEXT_MUTED)
+        vtxt = self.font_small.render(value, True, config.COLOR_ACCENT)
+        self.screen.blit(ltxt, (panel.x + int(18 * config.LAYOUT_SCALE), y))
+        self.screen.blit(vtxt, (panel.x + int(132 * config.LAYOUT_SCALE), y))
+
+    def draw_target_progress_bar(self, mode, rect: pygame.Rect) -> None:
+        ratio = getattr(mode, "progress_ratio", 0.0)
+        ratio = max(0.0, min(1.0, float(ratio)))
+        radius = max(4, rect.height // 2)
+        pygame.draw.rect(self.screen, config.COLOR_PANEL_DARK, rect, border_radius=radius)
+        fill_width = int(round(rect.width * ratio))
+        if fill_width > 0:
+            fill_rect = rect.copy()
+            fill_rect.width = fill_width
+            pygame.draw.rect(self.screen, config.COLOR_SUCCESS, fill_rect, border_radius=radius)
+        pygame.draw.rect(self.screen, (82, 90, 114), rect, 2, border_radius=radius)
 
     def _draw_stat_box(self, y: int, labels: list[tuple[str, str]], height: int = 150) -> None:
         margin = int(20 * config.LAYOUT_SCALE)

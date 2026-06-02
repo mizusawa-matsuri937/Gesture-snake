@@ -113,10 +113,10 @@ CJK_FONTS = CJK_FONT_FILES + [
 
 # Wall tuples are relative to the right-side game area: (offset_x, y, width, height).
 LEVELS = [
-    {"name": "Level 1", "target_score": 50, "walls": []},
+    {"name": "Level 1", "target_score": 100, "walls": []},
     {
         "name": "Level 2",
-        "target_score": 80,
+        "target_score": 100,
         "walls": [
             (260, 330, 520, 36),
         ],

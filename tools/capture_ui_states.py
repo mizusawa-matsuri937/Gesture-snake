@@ -45,7 +45,7 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
         "options": lambda: _set_state(game, config.STATE_OPTIONS, "single"),
         "coming_soon": lambda: _set_state(game, config.STATE_COMING_SOON, "single"),
         "playing_single": lambda: _set_state(game, config.STATE_PLAYING_SINGLE, "single"),
-        "playing_level": lambda: _set_state(game, config.STATE_PLAYING_LEVEL, "level"),
+        "playing_level": lambda: _set_playing_level(game),
         "paused_single": lambda: _set_paused(game, config.STATE_PLAYING_SINGLE, "single"),
         "paused_level": lambda: _set_paused(game, config.STATE_PLAYING_LEVEL, "level"),
         "gameover_single": lambda: _set_gameover_single(game),
@@ -83,6 +83,15 @@ def _set_gameover_single(game: Game) -> None:
     game.single_mode.apples_eaten = 12
     game.state = config.STATE_GAMEOVER
     game.active_mode_name = "single"
+
+
+def _set_playing_level(game: Game) -> None:
+    game.level_mode.level_index = 0
+    game.level_mode.level_score = 50
+    game.level_mode.total_score = 50
+    game.state = config.STATE_PLAYING_LEVEL
+    game.active_mode_name = "level"
+    game.pause_reason = None
 
 
 def _set_gameover_level(game: Game) -> None:

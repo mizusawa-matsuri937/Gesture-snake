@@ -63,6 +63,12 @@ class LevelMode:
         return int(self.current_level["target_score"])
 
     @property
+    def progress_ratio(self) -> float:
+        if self.target_score <= 0:
+            return 0.0
+        return max(0.0, min(1.0, self.level_score / self.target_score))
+
+    @property
     def display_level_number(self) -> int:
         return self.level_index + 1
 

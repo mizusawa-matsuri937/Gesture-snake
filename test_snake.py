@@ -262,6 +262,33 @@ class UILayoutTests(unittest.TestCase):
                     image = pygame.image.load(str(path))
                     self.assertEqual(image.get_size(), config.WINDOWED_SIZE)
 
+    def test_level_target_progress_bar_fills_by_score_ratio(self):
+        from ui import GameUI
+
+        pygame.init()
+        try:
+            screen = pygame.Surface(config.WINDOWED_SIZE)
+            ui = GameUI(screen)
+            mode = type(
+                "ModeStub",
+                (),
+                {"level_score": 50, "target_score": 100, "progress_ratio": 0.5},
+            )()
+            rect = pygame.Rect(40, 40, 200, 20)
+
+            ui.draw_target_progress_bar(mode, rect)
+
+            self.assertEqual(
+                screen.get_at((rect.left + 45, rect.centery))[:3],
+                config.COLOR_SUCCESS,
+            )
+            self.assertNotEqual(
+                screen.get_at((rect.left + 155, rect.centery))[:3],
+                config.COLOR_SUCCESS,
+            )
+        finally:
+            pygame.quit()
+
 
 class GestureDebouncerTests(unittest.TestCase):
     def test_gesture_trigger_fires_only_on_rising_edge_and_cooldown(self):
@@ -294,6 +321,12 @@ class ActiveHandSelectionTests(unittest.TestCase):
 
 
 class LevelModeTests(unittest.TestCase):
+    def test_first_two_levels_target_about_ten_apples(self):
+        ten_apples = config.LEVEL_APPLE_SCORE * 10
+
+        self.assertEqual(config.LEVELS[0]["target_score"], ten_apples)
+        self.assertEqual(config.LEVELS[1]["target_score"], ten_apples)
+
     def test_level_config_contains_playable_wall_progression(self):
         self.assertGreaterEqual(len(config.LEVELS), 5)
         self.assertEqual(config.LEVELS[0]["walls"], [])
@@ -353,6 +386,18 @@ class LevelModeTests(unittest.TestCase):
         mode.level_score = 10
 
         self.assertTrue(mode.reached_target_score())
+
+    def test_level_progress_ratio_reflects_stage_score_and_caps(self):
+        mode = LevelMode(levels=[{"name": "Test", "target_score": 100, "walls": []}])
+        mode.level_score = 50
+
+        self.assertEqual(mode.progress_ratio, 0.5)
+
+        mode.level_score = 150
+        self.assertEqual(mode.progress_ratio, 1.0)
+
+        mode.level_score = -10
+        self.assertEqual(mode.progress_ratio, 0.0)
 
     def test_level_clear_advances_to_next_level(self):
         mode = LevelMode(

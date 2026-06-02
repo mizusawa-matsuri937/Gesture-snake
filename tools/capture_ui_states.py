@@ -23,6 +23,10 @@ REQUIRED_STATES = [
     "coming_soon",
     "playing_single",
     "playing_level",
+    "level_big_apple",
+    "level_3_moving_walls",
+    "level_4_portals",
+    "level_5_mixed",
     "paused_single",
     "paused_level",
     "gameover_single",
@@ -46,6 +50,10 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
         "coming_soon": lambda: _set_state(game, config.STATE_COMING_SOON, "single"),
         "playing_single": lambda: _set_state(game, config.STATE_PLAYING_SINGLE, "single"),
         "playing_level": lambda: _set_playing_level(game),
+        "level_big_apple": lambda: _set_level_big_apple(game, now),
+        "level_3_moving_walls": lambda: _set_level_stage(game, 2, 80, 180, now),
+        "level_4_portals": lambda: _set_level_stage(game, 3, 120, 300, now),
+        "level_5_mixed": lambda: _set_level_stage(game, 4, 250, 620, now),
         "paused_single": lambda: _set_paused(game, config.STATE_PLAYING_SINGLE, "single"),
         "paused_level": lambda: _set_paused(game, config.STATE_PLAYING_LEVEL, "level"),
         "gameover_single": lambda: _set_gameover_single(game),
@@ -86,16 +94,29 @@ def _set_gameover_single(game: Game) -> None:
 
 
 def _set_playing_level(game: Game) -> None:
-    game.level_mode.level_index = 0
-    game.level_mode.level_score = 50
-    game.level_mode.total_score = 50
+    _set_level_stage(game, 0, 50, 50, 8.0)
+
+
+def _set_level_stage(game: Game, level_index: int, level_score: int, total_score: int, now: float) -> None:
+    game.level_mode.level_index = level_index
+    game.level_mode.total_score = total_score
+    game.level_mode.reset_level(now, keep_total=True)
+    game.level_mode.level_score = level_score
+    game.level_mode.total_score = total_score
+    game.level_mode.update_moving_walls(now)
     game.state = config.STATE_PLAYING_LEVEL
     game.active_mode_name = "level"
     game.pause_reason = None
 
 
+def _set_level_big_apple(game: Game, now: float) -> None:
+    _set_level_stage(game, 0, 40, 40, now)
+    game.level_mode.spawn_big_food(now - 1.0)
+    game.level_mode.big_food.position = game.level_mode.snake.head_pos + pygame.Vector2(150, -120)
+
+
 def _set_gameover_level(game: Game) -> None:
-    game.level_mode.level_index = 2
+    _set_level_stage(game, 2, 60, 180, 8.0)
     game.level_mode.level_score = 60
     game.level_mode.total_score = 180
     game.state = config.STATE_GAMEOVER
@@ -103,7 +124,7 @@ def _set_gameover_level(game: Game) -> None:
 
 
 def _set_level_clear(game: Game) -> None:
-    game.level_mode.level_index = 1
+    _set_level_stage(game, 1, 0, 130, 8.0)
     game.level_mode.level_score = game.level_mode.target_score
     game.level_mode.total_score = 130
     game.level_mode.clear_started_at = 8.0

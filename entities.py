@@ -47,6 +47,72 @@ class Wall:
         return circle_rect_collision(center.x, center.y, radius, self.rect)
 
 
+@dataclass
+class MovingWall:
+    base_rect: pygame.Rect
+    axis: str
+    distance: int
+    speed: float
+    phase: float = 0.0
+    color: tuple[int, int, int] = config.COLOR_WALL
+
+    def __post_init__(self) -> None:
+        self.base_rect = pygame.Rect(self.base_rect)
+        self.rect = pygame.Rect(self.base_rect)
+        if self.axis not in {"x", "y"}:
+            raise ValueError(f"unsupported moving wall axis: {self.axis}")
+
+    @property
+    def track_rect(self) -> pygame.Rect:
+        end_rect = self.base_rect.move(
+            self.distance if self.axis == "x" else 0,
+            self.distance if self.axis == "y" else 0,
+        )
+        return self.base_rect.union(end_rect)
+
+    def update(self, now: float) -> None:
+        if self.distance <= 0 or self.speed <= 0:
+            self.rect = pygame.Rect(self.base_rect)
+            return
+        track = self.distance * 2
+        traveled = (now * self.speed + self.phase) % track
+        offset = traveled if traveled <= self.distance else track - traveled
+        dx = int(round(offset)) if self.axis == "x" else 0
+        dy = int(round(offset)) if self.axis == "y" else 0
+        self.rect = self.base_rect.move(dx, dy)
+
+    def collides_circle(self, center: pygame.Vector2, radius: float) -> bool:
+        return circle_rect_collision(center.x, center.y, radius, self.rect)
+
+
+@dataclass
+class PortalPair:
+    a_center: pygame.Vector2
+    b_center: pygame.Vector2
+    radius: int
+    color: tuple[int, int, int]
+
+    def __post_init__(self) -> None:
+        self.a_center = pygame.Vector2(self.a_center)
+        self.b_center = pygame.Vector2(self.b_center)
+
+    def contains(self, point: pygame.Vector2, center: pygame.Vector2) -> bool:
+        return distance_sq(point, center) <= self.radius * self.radius
+
+    def exit_position_for(self, point: pygame.Vector2) -> Optional[pygame.Vector2]:
+        if self.contains(point, self.a_center):
+            return self.b_center + (point - self.a_center)
+        if self.contains(point, self.b_center):
+            return self.a_center + (point - self.b_center)
+        return None
+
+    def collides_rect(self, rect: pygame.Rect, margin: float = 0.0) -> bool:
+        return (
+            circle_rect_collision(self.a_center.x, self.a_center.y, self.radius + margin, rect)
+            or circle_rect_collision(self.b_center.x, self.b_center.y, self.radius + margin, rect)
+        )
+
+
 class Snake:
     def __init__(
         self,
@@ -92,6 +158,20 @@ class Snake:
 
     def grow(self, amount: int) -> None:
         self.target_segments += amount
+
+    def teleport_head(self, new_pos: pygame.Vector2, direction: pygame.Vector2) -> None:
+        old_body = list(self.body)
+        self.head_pos = pygame.Vector2(new_pos)
+        if direction.length_squared() > 0:
+            self.direction = pygame.Vector2(direction).normalize()
+        self.target_pos = pygame.Vector2(self.head_pos) + self.direction * 70
+        margin = config.SNAKE_RADIUS + 8
+        self.target_pos.x = max(
+            config.SIDEBAR_WIDTH + margin,
+            min(config.WINDOW_WIDTH - margin, self.target_pos.x),
+        )
+        self.target_pos.y = max(margin, min(config.WINDOW_HEIGHT - margin, self.target_pos.y))
+        self.body = [pygame.Vector2(self.head_pos)] + old_body[: max(0, self.target_segments - 1)]
 
     def wrap_head(self) -> None:
         self.head_pos = wrap_in_game_area(self.head_pos)

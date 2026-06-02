@@ -7,7 +7,7 @@ import numpy as np
 import pygame
 
 import config
-from entities import Food, Snake, Wall
+from entities import Food, MovingWall, PortalPair, Snake, Wall
 from utils import load_font
 
 
@@ -116,9 +116,29 @@ class GameUI:
 
     def draw_world(self, mode, mode_name: str, now: float) -> None:
         if mode_name == "level":
+            for wall in mode.moving_walls:
+                self.draw_moving_wall_track(wall)
             for wall in mode.walls:
                 self.draw_wall(wall)
+            for wall in mode.moving_walls:
+                self.draw_moving_wall(wall)
+            for portal in mode.portals:
+                self.draw_portal_pair(portal, now)
             self.draw_apple(mode.food)
+            if mode.big_food:
+                if int(now * 8) % 2 == 0 or mode.big_food.remaining(now) > 2.0:
+                    self.draw_apple(mode.big_food, big=True)
+                remaining = self.font_small.render(
+                    f"{mode.big_food.remaining(now):.1f}s",
+                    True,
+                    config.COLOR_WARNING,
+                )
+                self.screen.blit(
+                    remaining,
+                    remaining.get_rect(
+                        center=(int(mode.big_food.position.x), int(mode.big_food.position.y) - 44)
+                    ),
+                )
             self.draw_snake(mode.snake)
         elif mode_name == "single":
             self.draw_apple(mode.normal_food)
@@ -139,6 +159,27 @@ class GameUI:
     def draw_wall(self, wall: Wall) -> None:
         pygame.draw.rect(self.screen, wall.color, wall.rect, border_radius=3)
         pygame.draw.rect(self.screen, config.COLOR_WALL_BORDER, wall.rect, 2, border_radius=3)
+
+    def draw_moving_wall_track(self, wall: MovingWall) -> None:
+        track = wall.track_rect.inflate(10, 10)
+        pygame.draw.rect(self.screen, config.COLOR_MOVING_WALL_TRACK, track, border_radius=8)
+        pygame.draw.rect(self.screen, (90, 100, 132), track, 1, border_radius=8)
+
+    def draw_moving_wall(self, wall: MovingWall) -> None:
+        pygame.draw.rect(self.screen, wall.color, wall.rect, border_radius=5)
+        pygame.draw.rect(self.screen, (210, 220, 255), wall.rect, 2, border_radius=5)
+        inner = wall.rect.inflate(-12, -12)
+        if inner.width > 0 and inner.height > 0:
+            pygame.draw.rect(self.screen, (88, 220, 255), inner, border_radius=4)
+
+    def draw_portal_pair(self, portal: PortalPair, now: float) -> None:
+        pulse = 2 + int((now * 4) % 3)
+        for center in (portal.a_center, portal.b_center):
+            pos = (int(center.x), int(center.y))
+            pygame.draw.circle(self.screen, (8, 12, 28), pos, portal.radius + 10)
+            pygame.draw.circle(self.screen, portal.color, pos, portal.radius + pulse, 3)
+            pygame.draw.circle(self.screen, portal.color, pos, portal.radius - 9, 2)
+            pygame.draw.circle(self.screen, (220, 235, 255), pos, 6)
 
     def draw_apple(self, food: Food, big: bool = False) -> None:
         pos = (int(food.position.x), int(food.position.y))
@@ -203,7 +244,7 @@ class GameUI:
 
         y = panel.bottom + int(46 * config.LAYOUT_SCALE)
         if mode_name == "level":
-            self.draw_level_stat_panel(mode, y, sensitivity_label)
+            self.draw_level_stat_panel(mode, y, now, sensitivity_label)
             self.draw_level_help_text()
         else:
             self.draw_single_stat_panel(mode, y, now, sensitivity_label)
@@ -225,10 +266,10 @@ class GameUI:
             )
             self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(126 * config.LAYOUT_SCALE)))
 
-    def draw_level_stat_panel(self, mode, y: int, sensitivity_label: str) -> None:
+    def draw_level_stat_panel(self, mode, y: int, now: float, sensitivity_label: str) -> None:
         margin = int(20 * config.LAYOUT_SCALE)
         panel_width = config.SIDEBAR_WIDTH - 40
-        panel_height = int(246 * config.LAYOUT_SCALE)
+        panel_height = int(270 * config.LAYOUT_SCALE)
         row_gap = int(31 * config.LAYOUT_SCALE)
         panel = pygame.Rect(margin, y, panel_width, panel_height)
         pygame.draw.rect(self.screen, config.COLOR_PANEL, panel, border_radius=8)
@@ -277,6 +318,13 @@ class GameUI:
         ]
         for i, (label, value) in enumerate(lower_labels):
             self._draw_stat_row(panel, lower_y + i * row_gap, label, value)
+        if mode.big_food:
+            bonus = self.font_tiny.render(
+                f"Big Apple {mode.big_food.remaining(now):.1f}s",
+                True,
+                config.COLOR_WARNING,
+            )
+            self.screen.blit(bonus, (panel.x + int(18 * config.LAYOUT_SCALE), y + int(235 * config.LAYOUT_SCALE)))
 
     def _draw_stat_row(self, panel: pygame.Rect, y: int, label: str, value: str) -> None:
         ltxt = self.font_small.render(label, True, config.COLOR_TEXT_MUTED)
@@ -327,10 +375,10 @@ class GameUI:
         lines = [
             "Level Rules",
             "Index finger: steer target",
-            "Wall, edge, or body collision fails",
+            "Walls and moving walls are deadly",
+            "Portals move the snake head",
+            "Big apples are timed bonuses",
             "Reach the target to advance",
-            "Apples avoid walls and body",
-            "Dead-end apple spots are skipped",
         ]
         self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
@@ -412,6 +460,9 @@ class GameUI:
     def draw_overlay_panel(self, title: str, lines: list[str], color: tuple[int, int, int]) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         center_y = config.WINDOW_HEIGHT // 2
+        dim = pygame.Surface((config.GAME_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 175))
+        self.screen.blit(dim, (config.SIDEBAR_WIDTH, 0))
         box_w = min(int(720 * config.LAYOUT_SCALE), config.GAME_WIDTH - int(120 * config.LAYOUT_SCALE))
         box_h = min(int(330 * config.LAYOUT_SCALE), config.WINDOW_HEIGHT - int(120 * config.LAYOUT_SCALE))
         box = pygame.Rect(0, 0, box_w, box_h)

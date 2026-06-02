@@ -12,7 +12,7 @@ import pygame
 import numpy as np
 
 import config
-from entities import Food, Snake, Wall
+from entities import Food, MovingWall, PortalPair, Snake, Wall
 from modes.level_mode import LevelMode
 from modes.single_mode import SingleMode, current_speed_for_apples
 from ui import Button
@@ -251,6 +251,11 @@ class UILayoutTests(unittest.TestCase):
     def test_screenshot_harness_renders_every_ui_state(self):
         from tools.capture_ui_states import REQUIRED_STATES, capture_ui_states
 
+        self.assertIn("level_big_apple", REQUIRED_STATES)
+        self.assertIn("level_3_moving_walls", REQUIRED_STATES)
+        self.assertIn("level_4_portals", REQUIRED_STATES)
+        self.assertIn("level_5_mixed", REQUIRED_STATES)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             captures = capture_ui_states(output_dir)
@@ -321,16 +326,68 @@ class ActiveHandSelectionTests(unittest.TestCase):
 
 
 class LevelModeTests(unittest.TestCase):
-    def test_first_two_levels_target_about_ten_apples(self):
-        ten_apples = config.LEVEL_APPLE_SCORE * 10
-
-        self.assertEqual(config.LEVELS[0]["target_score"], ten_apples)
-        self.assertEqual(config.LEVELS[1]["target_score"], ten_apples)
+    def test_level_targets_keep_current_balance(self):
+        self.assertEqual(config.LEVELS[0]["target_score"], 100)
+        self.assertEqual(config.LEVELS[1]["target_score"], 150)
+        self.assertEqual(config.BIG_FOOD_SCORE, 30)
 
     def test_level_config_contains_playable_wall_progression(self):
         self.assertGreaterEqual(len(config.LEVELS), 5)
         self.assertEqual(config.LEVELS[0]["walls"], [])
         self.assertTrue(any(level["walls"] for level in config.LEVELS[1:]))
+
+    def test_level_config_contains_dynamic_and_portal_progression(self):
+        self.assertGreaterEqual(len(config.LEVELS[2].get("moving_walls", [])), 2)
+        self.assertGreaterEqual(len(config.LEVELS[3].get("portals", [])), 2)
+        self.assertGreaterEqual(len(config.LEVELS[4].get("moving_walls", [])), 2)
+        self.assertGreaterEqual(len(config.LEVELS[4].get("portals", [])), 1)
+
+    def test_level_two_and_later_static_walls_are_left_right_symmetric(self):
+        for level in config.LEVELS[1:]:
+            with self.subTest(level=level["name"]):
+                self.assertTrue(LevelMode(levels=[level]).static_walls_are_symmetric())
+
+    def test_level_obstacle_layouts_do_not_overlap(self):
+        for level in config.LEVELS:
+            with self.subTest(level=level["name"]):
+                self.assertEqual(LevelMode(levels=[level]).layout_issues(), [])
+
+    def test_moving_wall_ping_pongs_along_track(self):
+        wall = MovingWall(
+            pygame.Rect(config.SIDEBAR_WIDTH + 100, 120, 80, 30),
+            axis="x",
+            distance=120,
+            speed=60,
+        )
+
+        wall.update(0.0)
+        self.assertEqual(wall.rect.x, config.SIDEBAR_WIDTH + 100)
+        wall.update(2.0)
+        self.assertEqual(wall.rect.x, config.SIDEBAR_WIDTH + 220)
+        wall.update(4.0)
+        self.assertEqual(wall.rect.x, config.SIDEBAR_WIDTH + 100)
+
+    def test_portal_pair_teleports_with_relative_position(self):
+        portal = PortalPair(
+            pygame.Vector2(config.SIDEBAR_WIDTH + 200, 200),
+            pygame.Vector2(config.SIDEBAR_WIDTH + 700, 500),
+            radius=34,
+            color=(90, 170, 255),
+        )
+        exit_pos = portal.exit_position_for(pygame.Vector2(config.SIDEBAR_WIDTH + 210, 188))
+
+        self.assertEqual(exit_pos, pygame.Vector2(config.SIDEBAR_WIDTH + 710, 488))
+
+    def test_snake_head_teleport_does_not_insert_cross_map_trail(self):
+        snake = Snake(pygame.Vector2(config.SIDEBAR_WIDTH + 200, 200))
+        old_body = list(snake.body)
+        target = pygame.Vector2(config.SIDEBAR_WIDTH + 700, 500)
+
+        snake.teleport_head(target, pygame.Vector2(1, 0))
+
+        self.assertEqual(snake.head_pos, target)
+        self.assertEqual(snake.body[0], target)
+        self.assertEqual(snake.body[1:], old_body[:-1])
 
     def test_level_mode_boundary_collision_is_deadly(self):
         mode = LevelMode(rng=random.Random(1))
@@ -342,6 +399,29 @@ class LevelModeTests(unittest.TestCase):
         wall = Wall(pygame.Rect(600, 300, 80, 30))
         mode = LevelMode(levels=[{"name": "Test", "target_score": 10, "walls": [wall.rect]}])
         mode.snake.head_pos = pygame.Vector2(610, 315)
+
+        self.assertTrue(mode.hits_wall())
+
+    def test_level_mode_moving_wall_collision_is_deadly(self):
+        mode = LevelMode(
+            levels=[
+                {
+                    "name": "Moving Test",
+                    "target_score": 10,
+                    "walls": [],
+                    "moving_walls": [
+                        {
+                            "rect": (160, 260, 100, 32),
+                            "axis": "x",
+                            "distance": 100,
+                            "speed": 50,
+                        }
+                    ],
+                }
+            ]
+        )
+        wall = mode.moving_walls[0]
+        mode.snake.head_pos = pygame.Vector2(wall.rect.center)
 
         self.assertTrue(mode.hits_wall())
 
@@ -386,6 +466,65 @@ class LevelModeTests(unittest.TestCase):
         mode.level_score = 10
 
         self.assertTrue(mode.reached_target_score())
+
+    def test_level_big_food_spawns_after_fifth_normal_apple(self):
+        mode = LevelMode(levels=[{"name": "Big Test", "target_score": 500, "walls": []}])
+        mode.food.position = pygame.Vector2(mode.snake.head_pos)
+        mode.apples_eaten = config.BIG_FOOD_EVERY - 1
+
+        mode.update(VisionResult(), dt=0.0, now=10.0, sensitivity=1.0)
+
+        self.assertIsNotNone(mode.big_food)
+        self.assertEqual(mode.big_food.score, config.BIG_FOOD_SCORE)
+
+    def test_level_big_food_expires_after_duration(self):
+        mode = LevelMode(levels=[{"name": "Big Test", "target_score": 500, "walls": []}])
+        mode.spawn_big_food(now=10.0)
+
+        mode.update(VisionResult(), dt=0.0, now=10.0 + config.BIG_FOOD_DURATION + 0.1, sensitivity=1.0)
+
+        self.assertIsNone(mode.big_food)
+
+    def test_level_big_food_adds_score_growth_and_can_clear_level(self):
+        mode = LevelMode(levels=[{"name": "Big Test", "target_score": 30, "walls": []}])
+        starting_segments = mode.snake.target_segments
+        mode.spawn_big_food(now=10.0)
+        mode.big_food.position = pygame.Vector2(mode.snake.head_pos)
+
+        event = mode.update(VisionResult(), dt=0.0, now=10.5, sensitivity=1.0)
+
+        self.assertEqual(event, "level_clear")
+        self.assertEqual(mode.level_score, config.BIG_FOOD_SCORE)
+        self.assertEqual(mode.total_score, config.BIG_FOOD_SCORE)
+        self.assertEqual(mode.snake.target_segments, starting_segments + config.BIG_GROWTH)
+
+    def test_level_portal_transports_head_and_uses_cooldown(self):
+        mode = LevelMode(
+            levels=[
+                {
+                    "name": "Portal Test",
+                    "target_score": 100,
+                    "walls": [],
+                    "portals": [
+                        {
+                            "a": (220, 220),
+                            "b": (760, 480),
+                            "radius": 34,
+                            "color": (80, 170, 255),
+                        }
+                    ],
+                }
+            ]
+        )
+        mode.snake.head_pos = pygame.Vector2(mode.portals[0].a_center.x + 8, mode.portals[0].a_center.y - 6)
+        mode.snake.target_pos = pygame.Vector2(mode.snake.head_pos)
+
+        mode.apply_portals(now=10.0)
+        first_exit = pygame.Vector2(mode.snake.head_pos)
+        mode.apply_portals(now=10.1)
+
+        self.assertEqual(first_exit, pygame.Vector2(mode.portals[0].b_center.x + 8, mode.portals[0].b_center.y - 6))
+        self.assertEqual(mode.snake.head_pos, first_exit)
 
     def test_level_progress_ratio_reflects_stage_score_and_caps(self):
         mode = LevelMode(levels=[{"name": "Test", "target_score": 100, "walls": []}])
@@ -434,11 +573,13 @@ class LevelModeTests(unittest.TestCase):
         mode.level_index = 2
         mode.level_score = 40
         mode.total_score = 90
+        mode.spawn_big_food(now=2.0)
         mode.back_to_menu()
 
         self.assertEqual(mode.level_index, 0)
         self.assertEqual(mode.level_score, 0)
         self.assertEqual(mode.total_score, 0)
+        self.assertIsNone(mode.big_food)
 
 
 class SnakeEntityTests(unittest.TestCase):

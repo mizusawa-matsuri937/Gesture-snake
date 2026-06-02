@@ -35,6 +35,10 @@ COLOR_FOOD = (231, 76, 60)
 COLOR_BIG_FOOD = (255, 45, 45)
 COLOR_WALL = (108, 116, 148)
 COLOR_WALL_BORDER = (180, 190, 225)
+COLOR_MOVING_WALL = (128, 148, 210)
+COLOR_MOVING_WALL_TRACK = (52, 60, 82)
+COLOR_PORTAL_BLUE = (80, 180, 255)
+COLOR_PORTAL_PURPLE = (190, 110, 255)
 COLOR_TEXT = (255, 255, 255)
 COLOR_TEXT_MUTED = (170, 176, 190)
 COLOR_ACCENT = (52, 152, 219)
@@ -50,7 +54,7 @@ START_LENGTH = 20
 NORMAL_GROWTH = 1
 BIG_GROWTH = 3
 NORMAL_FOOD_SCORE = 10
-BIG_FOOD_SCORE = 50
+BIG_FOOD_SCORE = 30
 BIG_FOOD_EVERY = 5
 BIG_FOOD_DURATION = 5.0
 INVINCIBLE_SECONDS = 3.0
@@ -68,6 +72,7 @@ LEVEL_APPLE_SCORE = 10
 LEVEL_APPLE_GROWTH = 1
 LEVEL_FOOD_GRID_SIZE = 40
 LEVEL_CLEAR_DELAY = 1.0
+PORTAL_COOLDOWN = 0.6
 
 # Gesture tuning
 PINCH_THRESHOLD = 0.055
@@ -111,43 +116,58 @@ CJK_FONTS = CJK_FONT_FILES + [
     "arial",
 ]
 
-# Wall tuples are relative to the right-side game area: (offset_x, y, width, height).
+# Obstacle coordinates are relative to the right-side game area.
 LEVELS = [
     {"name": "Level 1", "target_score": 100, "walls": []},
     {
         "name": "Level 2",
-        "target_score": 100,
+        "target_score": 150,
         "walls": [
-            (260, 330, 520, 36),
+            (265, 330, 520, 36),
         ],
     },
     {
         "name": "Level 3",
-        "target_score": 120,
+        "target_score": 200,
         "walls": [
-            (210, 160, 430, 34),
-            (420, 590, 430, 34),
+            (250, 160, 550, 34),
+            (250, 606, 550, 34),
+        ],
+        "moving_walls": [
+            {"rect": (180, 340, 120, 30), "axis": "y", "distance": 120, "speed": 55},
+            {"rect": (750, 340, 120, 30), "axis": "y", "distance": 120, "speed": 55, "phase": 120},
         ],
     },
     {
         "name": "Level 4",
-        "target_score": 160,
+        "target_score": 300,
         "walls": [
-            (260, 130, 36, 470),
-            (520, 260, 36, 470),
-            (780, 130, 36, 470),
+            (250, 140, 36, 500),
+            (764, 140, 36, 500),
+            (507, 250, 36, 300),
+        ],
+        "portals": [
+            {"a": (145, 170), "b": (905, 630), "radius": 34, "color": COLOR_PORTAL_BLUE},
+            {"a": (905, 170), "b": (145, 630), "radius": 34, "color": COLOR_PORTAL_PURPLE},
         ],
     },
     {
         "name": "Level 5",
-        "target_score": 220,
+        "target_score": 500,
         "walls": [
-            (190, 150, 36, 500),
-            (380, 130, 400, 34),
-            (380, 632, 400, 34),
-            (820, 230, 36, 390),
-            (520, 320, 180, 36),
-            (520, 450, 180, 36),
+            (180, 150, 36, 500),
+            (834, 150, 36, 500),
+            (360, 150, 330, 34),
+            (360, 616, 330, 34),
+            (390, 340, 120, 32),
+            (540, 340, 120, 32),
+        ],
+        "moving_walls": [
+            {"rect": (250, 260, 95, 30), "axis": "y", "distance": 170, "speed": 70},
+            {"rect": (705, 260, 95, 30), "axis": "y", "distance": 170, "speed": 70, "phase": 170},
+        ],
+        "portals": [
+            {"a": (310, 85), "b": (740, 715), "radius": 32, "color": COLOR_PORTAL_BLUE},
         ],
     },
 ]

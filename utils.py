@@ -54,16 +54,23 @@ def distance_sq(
 dist_sq = distance_sq
 
 
-def wrap_in_game_area(position: pygame.Vector2) -> pygame.Vector2:
+def wrap_in_game_area(position: pygame.Vector2, margin: float = 0.0) -> pygame.Vector2:
     wrapped = pygame.Vector2(position)
-    while wrapped.x < config.SIDEBAR_WIDTH:
-        wrapped.x += config.GAME_WIDTH
-    while wrapped.x > config.WINDOW_WIDTH:
-        wrapped.x -= config.GAME_WIDTH
-    while wrapped.y < 0:
-        wrapped.y += config.WINDOW_HEIGHT
-    while wrapped.y > config.WINDOW_HEIGHT:
-        wrapped.y -= config.WINDOW_HEIGHT
+    left = config.SIDEBAR_WIDTH + margin
+    right = config.WINDOW_WIDTH - margin
+    top = margin
+    bottom = config.WINDOW_HEIGHT - margin
+    width = right - left
+    height = bottom - top
+
+    while wrapped.x < left:
+        wrapped.x += width
+    while wrapped.x > right:
+        wrapped.x -= width
+    while wrapped.y < top:
+        wrapped.y += height
+    while wrapped.y > bottom:
+        wrapped.y -= height
     return wrapped
 
 

@@ -11,6 +11,8 @@ Gesture Snake is a Python, pygame, OpenCV, and MediaPipe game where the snake fo
 - Single-hand lock, so the first detected hand keeps control.
 - `Single Player` opens `Endless Challenges`, a five-card level-select screen.
 - Endless challenges reuse the five level maps but do not use target scores, target bars, or Level Clear.
+- Classic endless play and Endless Challenges wrap at map edges as soon as the snake head reaches the boundary.
+- `Duo Mode` supports a shared-camera battle where the left half controls the green snake and the right half controls the blue snake.
 - `Level Mode` keeps target scores, a horizontal target progress bar, Level Clear, moving walls, portals, and timed big apples.
 
 ## Run
@@ -44,6 +46,8 @@ Press `ESC` to quit.
 | Peace gesture on Game Over | Restart the current mode |
 | Mouse click | Fallback button input |
 | `Options` | Change gesture sensitivity |
+| Shared camera left half | Control the green snake in Duo Mode |
+| Shared camera right half | Control the blue snake in Duo Mode |
 | `F11` | Toggle fullscreen/windowed |
 | `ESC` | Quit |
 
@@ -68,7 +72,33 @@ Endless challenges use the single-player scoring and speed rules:
 - Speed gain: +8 px/s per normal apple.
 - Max speed: 420 px/s.
 
-There is no target score, no target progress bar, and no Level Clear in endless challenges. Static walls and moving walls are deadly, self-collision is deadly after spawn protection, portals teleport the snake head, and map edges still wrap.
+There is no target score, no target progress bar, and no Level Clear in endless challenges. Static walls and moving walls are deadly, self-collision is deadly after spawn protection, portals teleport the snake head, and map edges still wrap from the opposite side when the snake head reaches the boundary.
+
+### Duo Mode
+
+`Duo Mode` starts with a control setup screen:
+
+- `Shared Camera`: playable in this version.
+- `Separate Cameras`: visible as Coming Soon.
+
+Shared camera battles use the same five endless maps. The camera preview is split into left and right halves:
+
+- Left half controls the green snake.
+- Right half controls the blue snake.
+- Both players must be detected in their own half for 0.5 seconds before the match starts.
+- Tracking loss or a finger crossing the center line pauses the match and freezes the timer.
+- Duo sensitivity is fixed at x8.
+
+Duo battle rules:
+
+- Match time: 3 minutes of active play.
+- Shared normal apples and big apples use the endless scoring and growth rules.
+- Big apples appear every 5 normal apples eaten by either player.
+- Map edges wrap, portals teleport, and portal cooldowns are tracked per snake.
+- Walls, moving walls, self-collision, opponent body collision, and head-on collisions are deadly.
+- A snake death subtracts 100 points and immediately ends the match.
+- Head-on collision subtracts 100 points from both players.
+- Highest score wins; tied scores show Draw.
 
 ### Level Mode
 
@@ -93,6 +123,7 @@ game.py                   # Main loop and state machine
 modes/
   single_mode.py          # Classic endless mode logic
   endless_challenge_mode.py
+  duo_mode.py               # Shared-camera two-player battle mode
   obstacle_helpers.py     # Shared wall, portal, and safe food helpers
   level_mode.py           # Target-based level mode
 tools/capture_ui_states.py

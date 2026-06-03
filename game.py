@@ -6,12 +6,13 @@ from typing import Optional
 import pygame
 
 import config
+from modes.duo_mode import DuoMode
 from modes.endless_challenge_mode import EndlessChallengeMode
 from modes.level_mode import LevelMode
 from modes.single_mode import SingleMode
 from ui import Button, GameUI
 from utils import next_sensitivity_index, norm_to_window
-from vision import VisionResult, VisionSystem, should_pause_for_tracking
+from vision import DuoVisionResult, VisionResult, VisionSystem, should_pause_for_tracking
 
 
 class NullVisionSystem:
@@ -19,6 +20,9 @@ class NullVisionSystem:
 
     def update(self, now: float) -> VisionResult:
         return VisionResult()
+
+    def update_duo(self, now: float) -> DuoVisionResult:
+        return DuoVisionResult()
 
     def seconds_since_seen(self, now: float) -> float:
         return now
@@ -52,15 +56,21 @@ class Game:
         self.single_mode = SingleMode()
         self.single_challenge_mode = EndlessChallengeMode()
         self.level_mode = LevelMode()
+        self.duo_mode = DuoMode()
 
         self.menu_buttons: list[tuple[str, Button]] = []
         self.single_level_buttons: list[tuple[int, Button]] = []
         self.single_level_select_buttons: list[tuple[str, Button]] = []
+        self.duo_control_buttons: list[tuple[str, Button]] = []
+        self.duo_control_nav_buttons: list[tuple[str, Button]] = []
+        self.duo_level_buttons: list[tuple[int, Button]] = []
+        self.duo_level_select_buttons: list[tuple[str, Button]] = []
         self.options_buttons: list[tuple[str, Button]] = []
         self.pause_buttons: list[tuple[str, Button]] = []
         self.pause_challenge_buttons: list[tuple[str, Button]] = []
         self.gameover_buttons: list[tuple[str, Button]] = []
         self.gameover_challenge_buttons: list[tuple[str, Button]] = []
+        self.gameover_duo_buttons: list[tuple[str, Button]] = []
         self.coming_soon_buttons: list[tuple[str, Button]] = []
         self._create_buttons()
 
@@ -97,7 +107,7 @@ class Game:
                 Button(
                     pygame.Rect(center_x - w // 2, menu_start + 3 * (h + gap), w, h),
                     "Duo Mode",
-                    "Coming Soon",
+                    "Battle",
                     config.COLOR_WARNING,
                 ),
             ),
@@ -125,6 +135,47 @@ class Game:
         select_back_y = grid_y + 3 * (card_h + card_gap) + int(10 * scale)
         self.single_level_select_buttons = [
             ("menu", Button(pygame.Rect(center_x - w // 2, select_back_y, w, h), "Back to Menu")),
+        ]
+        self.duo_level_buttons = []
+        for index, challenge in enumerate(config.ENDLESS_CHALLENGES):
+            row = index // 2
+            col = index % 2
+            rect = pygame.Rect(
+                grid_x + col * (card_w + card_gap),
+                grid_y + row * (card_h + card_gap),
+                card_w,
+                card_h,
+            )
+            tags = " / ".join(challenge["tags"])
+            self.duo_level_buttons.append(
+                (index, Button(rect, f"{index + 1}. {challenge['name']}", tags, config.COLOR_WARNING))
+            )
+        self.duo_level_select_buttons = [
+            ("back", Button(pygame.Rect(center_x - w // 2, select_back_y, w, h), "Back")),
+        ]
+        control_y = int(config.WINDOW_HEIGHT * 0.38)
+        self.duo_control_buttons = [
+            (
+                "shared",
+                Button(
+                    pygame.Rect(center_x - w // 2, control_y, w, h),
+                    "Shared Camera",
+                    "Two hands, one camera",
+                    config.COLOR_SUCCESS,
+                ),
+            ),
+            (
+                "separate",
+                Button(
+                    pygame.Rect(center_x - w // 2, control_y + (h + gap), w, h),
+                    "Separate Cameras",
+                    "Coming Soon",
+                    config.COLOR_WARNING,
+                ),
+            ),
+        ]
+        self.duo_control_nav_buttons = [
+            ("menu", Button(pygame.Rect(center_x - w // 2, control_y + 2 * (h + gap), w, h), "Back to Menu")),
         ]
         option_y = int(config.WINDOW_HEIGHT * 0.50)
         self.options_buttons = [
@@ -174,6 +225,14 @@ class Game:
             ),
             ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y + 2 * (h + gap), w, h), "Main Menu")),
         ]
+        self.gameover_duo_buttons = [
+            ("restart", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Restart")),
+            (
+                "level_select",
+                Button(pygame.Rect(center_x - w // 2, overlay_button_y + (h + gap), w, h), "Map Select"),
+            ),
+            ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y + 2 * (h + gap), w, h), "Main Menu")),
+        ]
         self.coming_soon_buttons = [
             ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Back to Menu")),
         ]
@@ -193,6 +252,8 @@ class Game:
             return self.level_mode
         if self.active_mode_name == "single_challenge":
             return self.single_challenge_mode
+        if self.active_mode_name == "duo":
+            return self.duo_mode
         return self.single_mode
 
     def run(self) -> None:
@@ -213,7 +274,10 @@ class Game:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mouse_clicked = True
 
-            result = self.vision.update(now)
+            if self._uses_duo_vision():
+                result = self.vision.update_duo(now)
+            else:
+                result = self.vision.update(now)
             self.ui.update_camera_surface(result.frame)
             cursor_pos = self._cursor_pos(result)
 
@@ -221,17 +285,25 @@ class Game:
                 self._handle_menu(result, cursor_pos, mouse_pos, mouse_clicked, now)
             elif self.state == config.STATE_SINGLE_LEVEL_SELECT:
                 self._handle_single_level_select(result, cursor_pos, mouse_pos, mouse_clicked, now)
+            elif self.state == config.STATE_DUO_CONTROL_SELECT:
+                self._handle_duo_control_select(result, cursor_pos, mouse_pos, mouse_clicked)
+            elif self.state == config.STATE_DUO_LEVEL_SELECT:
+                self._handle_duo_level_select(result, cursor_pos, mouse_pos, mouse_clicked, now)
+            elif self.state == config.STATE_DUO_WAITING:
+                self._handle_duo_waiting(result, now)
             elif self.state == config.STATE_PLAYING_SINGLE:
                 self._handle_playing_single(result, dt, now)
             elif self.state == config.STATE_PLAYING_SINGLE_CHALLENGE:
                 self._handle_playing_single_challenge(result, dt, now)
             elif self.state == config.STATE_PLAYING_LEVEL:
                 self._handle_playing_level(result, dt, now)
+            elif self.state == config.STATE_PLAYING_DUO:
+                self._handle_playing_duo(result, dt, now)
             elif self.state == config.STATE_LEVEL_CLEAR:
                 self._handle_level_clear(now)
             elif self.state == config.STATE_PAUSED:
                 self._handle_paused(result, cursor_pos, mouse_pos, mouse_clicked, now)
-            elif self.state == config.STATE_GAMEOVER:
+            elif self.state in {config.STATE_GAMEOVER, config.STATE_DUO_GAMEOVER}:
                 self._handle_gameover(result, cursor_pos, mouse_pos, mouse_clicked, now)
             elif self.state == config.STATE_COMING_SOON:
                 self._handle_coming_soon(result, cursor_pos, mouse_pos, mouse_clicked)
@@ -244,10 +316,19 @@ class Game:
         pygame.quit()
         sys.exit()
 
-    def _cursor_pos(self, result: VisionResult) -> Optional[tuple[int, int]]:
-        if result.detected and result.index_tip_norm is not None:
+    def _cursor_pos(self, result) -> Optional[tuple[int, int]]:
+        if getattr(result, "detected", False) and getattr(result, "index_tip_norm", None) is not None:
             return norm_to_window(result.index_tip_norm)
         return None
+
+    def _uses_duo_vision(self) -> bool:
+        return self.state in {
+            config.STATE_DUO_CONTROL_SELECT,
+            config.STATE_DUO_LEVEL_SELECT,
+            config.STATE_DUO_WAITING,
+            config.STATE_PLAYING_DUO,
+            config.STATE_DUO_GAMEOVER,
+        } or (self.state == config.STATE_COMING_SOON and self.active_mode_name == "duo")
 
     def start_single_mode(self, now: float) -> None:
         self.single_mode.reset(now)
@@ -268,6 +349,12 @@ class Game:
         self.state = config.STATE_PLAYING_LEVEL
         self.pause_reason = None
 
+    def start_duo_mode(self, level_index: int, now: float) -> None:
+        self.duo_mode.select_level(level_index, now)
+        self.active_mode_name = "duo"
+        self.state = config.STATE_DUO_WAITING
+        self.pause_reason = None
+
     def _handle_menu(
         self,
         result: VisionResult,
@@ -286,7 +373,8 @@ class Game:
                 elif action == "options":
                     self.state = config.STATE_OPTIONS
                 elif action == "duo":
-                    self.state = config.STATE_COMING_SOON
+                    self.state = config.STATE_DUO_CONTROL_SELECT
+                    self.active_mode_name = "duo"
                 return
 
     def _handle_single_level_select(
@@ -306,6 +394,68 @@ class Game:
                 if action == "menu":
                     self.state = config.STATE_MENU
                     self.active_mode_name = "single"
+                return
+
+    def _button_clicked(
+        self,
+        button: Button,
+        result,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+    ) -> bool:
+        if button.clicked(cursor_pos, getattr(result, "pinch_clicked", False), mouse_pos, mouse_clicked):
+            return True
+        if isinstance(result, DuoVisionResult):
+            for player_result in (result.left, result.right):
+                if (
+                    player_result.pinch_clicked
+                    and player_result.raw_index_tip_norm is not None
+                    and button.hovered(norm_to_window(player_result.raw_index_tip_norm))
+                ):
+                    return True
+        return False
+
+    def _handle_duo_control_select(
+        self,
+        result,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+    ) -> None:
+        for action, button in self.duo_control_buttons:
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
+                if action == "shared":
+                    self.state = config.STATE_DUO_LEVEL_SELECT
+                    self.active_mode_name = "duo"
+                elif action == "separate":
+                    self.state = config.STATE_COMING_SOON
+                    self.active_mode_name = "duo"
+                return
+        for action, button in self.duo_control_nav_buttons:
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
+                if action == "menu":
+                    self.state = config.STATE_MENU
+                    self.active_mode_name = "single"
+                return
+
+    def _handle_duo_level_select(
+        self,
+        result,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+        now: float,
+    ) -> None:
+        for index, button in self.duo_level_buttons:
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
+                self.start_duo_mode(index, now)
+                return
+        for action, button in self.duo_level_select_buttons:
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
+                if action == "back":
+                    self.state = config.STATE_DUO_CONTROL_SELECT
+                    self.active_mode_name = "duo"
                 return
 
     def _handle_options(
@@ -354,6 +504,20 @@ class Game:
         elif event == "level_clear":
             self.active_mode_name = "level"
             self.state = config.STATE_LEVEL_CLEAR
+
+    def _handle_duo_waiting(self, result, now: float) -> None:
+        duo_result = result if isinstance(result, DuoVisionResult) else DuoVisionResult()
+        self.duo_mode.update(duo_result, dt=0.0, now=now)
+        if self.duo_mode.started:
+            self.active_mode_name = "duo"
+            self.state = config.STATE_PLAYING_DUO
+
+    def _handle_playing_duo(self, result, dt: float, now: float) -> None:
+        duo_result = result if isinstance(result, DuoVisionResult) else DuoVisionResult()
+        event = self.duo_mode.update(duo_result, dt, now)
+        if event == "gameover":
+            self.active_mode_name = "duo"
+            self.state = config.STATE_DUO_GAMEOVER
 
     def _handle_level_clear(self, now: float) -> None:
         if self.level_mode.should_auto_advance(now):
@@ -407,23 +571,26 @@ class Game:
 
     def _handle_gameover(
         self,
-        result: VisionResult,
+        result,
         cursor_pos: Optional[tuple[int, int]],
         mouse_pos: tuple[int, int],
         mouse_clicked: bool,
         now: float,
     ) -> None:
-        if result.peace_triggered:
+        if getattr(result, "peace_triggered", False):
             self._restart_active_mode(now)
             return
 
         for action, button in self.gameover_buttons_for_active_mode():
-            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
                 if action == "restart":
                     self._restart_active_mode(now)
                 elif action == "level_select":
-                    self.active_mode_name = "single"
-                    self.state = config.STATE_SINGLE_LEVEL_SELECT
+                    if self.active_mode_name == "duo":
+                        self.state = config.STATE_DUO_LEVEL_SELECT
+                    else:
+                        self.active_mode_name = "single"
+                        self.state = config.STATE_SINGLE_LEVEL_SELECT
                 elif action == "menu":
                     if self.active_mode_name == "level":
                         self.level_mode.back_to_menu()
@@ -438,6 +605,9 @@ class Game:
         elif self.active_mode_name == "single_challenge":
             self.single_challenge_mode.restart_level(now)
             self.state = config.STATE_PLAYING_SINGLE_CHALLENGE
+        elif self.active_mode_name == "duo":
+            self.duo_mode.restart_level(now)
+            self.state = config.STATE_DUO_WAITING
         else:
             self.start_single_mode(now)
 
@@ -447,20 +617,25 @@ class Game:
         return self.pause_buttons
 
     def gameover_buttons_for_active_mode(self) -> list[tuple[str, Button]]:
+        if self.active_mode_name == "duo":
+            return self.gameover_duo_buttons
         if self.active_mode_name == "single_challenge":
             return self.gameover_challenge_buttons
         return self.gameover_buttons
 
     def _handle_coming_soon(
         self,
-        result: VisionResult,
+        result,
         cursor_pos: Optional[tuple[int, int]],
         mouse_pos: tuple[int, int],
         mouse_clicked: bool,
     ) -> None:
         for _, button in self.coming_soon_buttons:
-            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
-                self.state = config.STATE_MENU
+            if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
+                if self.active_mode_name == "duo":
+                    self.state = config.STATE_DUO_CONTROL_SELECT
+                else:
+                    self.state = config.STATE_MENU
                 return
 
     def draw(
@@ -477,8 +652,11 @@ class Game:
             config.STATE_PLAYING_SINGLE,
             config.STATE_PLAYING_SINGLE_CHALLENGE,
             config.STATE_PLAYING_LEVEL,
+            config.STATE_DUO_WAITING,
+            config.STATE_PLAYING_DUO,
             config.STATE_PAUSED,
             config.STATE_GAMEOVER,
+            config.STATE_DUO_GAMEOVER,
             config.STATE_LEVEL_CLEAR,
         }:
             self.ui.draw_world(draw_mode, draw_mode_name, now)
@@ -488,6 +666,9 @@ class Game:
         if self.state == config.STATE_SINGLE_LEVEL_SELECT:
             sidebar_mode = None
             sidebar_mode_name = "single_challenge"
+        elif self.state in {config.STATE_DUO_CONTROL_SELECT, config.STATE_DUO_LEVEL_SELECT}:
+            sidebar_mode = None
+            sidebar_mode_name = "duo"
         self.ui.draw_sidebar(
             result,
             sidebar_mode,
@@ -506,11 +687,25 @@ class Game:
                 cursor_pos,
                 mouse_pos,
             )
+        elif self.state == config.STATE_DUO_CONTROL_SELECT:
+            self.ui.draw_duo_control_select(
+                self.duo_control_buttons,
+                self.duo_control_nav_buttons,
+                cursor_pos,
+                mouse_pos,
+            )
+        elif self.state == config.STATE_DUO_LEVEL_SELECT:
+            self.ui.draw_duo_level_select(
+                self.duo_level_buttons,
+                self.duo_level_select_buttons,
+                cursor_pos,
+                mouse_pos,
+            )
         elif self.state == config.STATE_PAUSED:
             self.ui.draw_pause()
             for _, button in self.pause_buttons_for_active_state():
                 button.draw(self.screen, self.ui.font_button, self.ui.font_small, cursor_pos, mouse_pos)
-        elif self.state == config.STATE_GAMEOVER:
+        elif self.state in {config.STATE_GAMEOVER, config.STATE_DUO_GAMEOVER}:
             self.ui.draw_gameover(
                 self.gameover_buttons_for_active_mode(),
                 cursor_pos,
@@ -529,6 +724,10 @@ class Game:
             )
         elif self.state == config.STATE_LEVEL_CLEAR:
             self.ui.draw_level_clear(self.level_mode)
+        elif self.state == config.STATE_DUO_WAITING:
+            self.ui.draw_small_notice("Waiting for both players...")
+        elif self.state == config.STATE_PLAYING_DUO and self.duo_mode.status == "paused":
+            self.ui.draw_overlay_panel("Duo Paused", [self.duo_mode.pause_reason], config.COLOR_WARNING)
         elif self.state == config.STATE_PLAYING_SINGLE and now < self.single_mode.invincible_until:
             self.ui.draw_small_notice("Spawn protection...")
         elif (
@@ -550,6 +749,8 @@ class Game:
             return "single"
         if self.state == config.STATE_PLAYING_SINGLE_CHALLENGE:
             return "single_challenge"
+        if self.state in {config.STATE_DUO_WAITING, config.STATE_PLAYING_DUO, config.STATE_DUO_GAMEOVER}:
+            return "duo"
         if self.state in {config.STATE_PLAYING_LEVEL, config.STATE_LEVEL_CLEAR}:
             return "level"
         if self.state in {config.STATE_PAUSED, config.STATE_GAMEOVER}:

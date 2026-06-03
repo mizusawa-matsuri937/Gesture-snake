@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import threading
+import time
 from typing import Any, Optional, Sequence
 
 import cv2
@@ -34,6 +36,84 @@ class VisionResult:
     pinch_clicked: bool = False
     peace_triggered: bool = False
     frame: Optional[np.ndarray] = None
+
+
+@dataclass
+class DuoPlayerVision:
+    detected: bool = False
+    index_tip_norm: Optional[tuple[float, float]] = None
+    raw_index_tip_norm: Optional[tuple[float, float]] = None
+    pinch_clicked: bool = False
+
+
+@dataclass
+class DuoVisionResult:
+    left: DuoPlayerVision = field(default_factory=DuoPlayerVision)
+    right: DuoPlayerVision = field(default_factory=DuoPlayerVision)
+    crossed_line: bool = False
+    pause_reason: str = ""
+    frame: Optional[np.ndarray] = None
+
+    @property
+    def detected(self) -> bool:
+        return self.left.detected or self.right.detected
+
+    @property
+    def ready(self) -> bool:
+        return self.left.detected and self.right.detected and not self.crossed_line
+
+
+def classify_duo_hands(
+    hand_landmarks: Sequence[Any],
+    left_pinch_clicked: bool = False,
+    right_pinch_clicked: bool = False,
+    frame: Optional[np.ndarray] = None,
+) -> DuoVisionResult:
+    left = DuoPlayerVision()
+    right = DuoPlayerVision()
+    crossed_line = False
+    duplicate_left = False
+    duplicate_right = False
+
+    for landmarks in hand_landmarks:
+        index_tip = landmarks.landmark[8]
+        raw_x = clamp(index_tip.x, 0.0, 1.0)
+        raw_y = clamp(index_tip.y, 0.0, 1.0)
+        if raw_x == 0.5:
+            crossed_line = True
+            continue
+        if raw_x < 0.5:
+            if left.detected:
+                duplicate_left = True
+                continue
+            left = DuoPlayerVision(
+                detected=True,
+                index_tip_norm=(round(raw_x * 2.0, 6), raw_y),
+                raw_index_tip_norm=(raw_x, raw_y),
+                pinch_clicked=left_pinch_clicked,
+            )
+        else:
+            if right.detected:
+                duplicate_right = True
+                continue
+            right = DuoPlayerVision(
+                detected=True,
+                index_tip_norm=(round((raw_x - 0.5) * 2.0, 6), raw_y),
+                raw_index_tip_norm=(raw_x, raw_y),
+                pinch_clicked=right_pinch_clicked,
+            )
+
+    pause_reason = ""
+    if crossed_line:
+        pause_reason = "Finger crossed center line"
+    elif not left.detected:
+        pause_reason = "Left hand lost"
+    elif not right.detected:
+        pause_reason = "Right hand lost"
+    elif duplicate_left or duplicate_right:
+        pause_reason = "Keep hands in separate halves"
+
+    return DuoVisionResult(left, right, crossed_line, pause_reason, frame)
 
 
 def should_pause_for_tracking(result: VisionResult, seconds_since_seen: float) -> bool:
@@ -107,11 +187,19 @@ class VisionSystem:
         self.index_smoother = Smoother(alpha=0.35)
         self.pinch_trigger = GestureTrigger(config.PINCH_COOLDOWN)
         self.peace_trigger = GestureTrigger(config.PEACE_COOLDOWN)
+        self.duo_left_smoother = Smoother(alpha=0.35)
+        self.duo_right_smoother = Smoother(alpha=0.35)
+        self.duo_left_pinch_trigger = GestureTrigger(config.PINCH_COOLDOWN)
+        self.duo_right_pinch_trigger = GestureTrigger(config.PINCH_COOLDOWN)
 
         self.active_hand_locked = False
         self.active_hand_center: Optional[tuple[float, float]] = None
         self.last_seen_time = -9999.0
         self.reacquire_delay = config.HAND_REACQUIRE_DELAY
+        self._duo_lock = threading.Lock()
+        self._duo_thread: Optional[threading.Thread] = None
+        self._duo_stop = threading.Event()
+        self._latest_duo_result: Optional[DuoVisionResult] = None
 
     @property
     def camera_ready(self) -> bool:
@@ -121,6 +209,7 @@ class VisionSystem:
         return now - self.last_seen_time
 
     def update(self, now: float) -> VisionResult:
+        self.stop_duo_thread()
         if not self.cap.isOpened():
             return VisionResult()
 
@@ -170,6 +259,87 @@ class VisionSystem:
 
         self._draw_hand_preview(frame, candidates, active_landmarks)
         return VisionResult(detected, index_tip_norm, pinch_clicked, peace_triggered, frame)
+
+    def update_duo(self, now: float) -> DuoVisionResult:
+        if not self.cap.isOpened():
+            return DuoVisionResult()
+        self.start_duo_thread()
+        with self._duo_lock:
+            if self._latest_duo_result is None:
+                return DuoVisionResult()
+            return self._latest_duo_result
+
+    def start_duo_thread(self) -> None:
+        if self._duo_thread and self._duo_thread.is_alive():
+            return
+        self._duo_stop.clear()
+        self._duo_thread = threading.Thread(target=self._duo_loop, daemon=True)
+        self._duo_thread.start()
+
+    def stop_duo_thread(self) -> None:
+        if self._duo_thread is None:
+            return
+        self._duo_stop.set()
+        self._duo_thread.join(timeout=0.4)
+        self._duo_thread = None
+
+    def _duo_loop(self) -> None:
+        while not self._duo_stop.is_set():
+            result = self._read_duo_result(time.monotonic())
+            with self._duo_lock:
+                self._latest_duo_result = result
+            time.sleep(0.001)
+
+    def _read_duo_result(self, now: float) -> DuoVisionResult:
+        if not self.cap.isOpened():
+            return DuoVisionResult()
+
+        ret, frame = self.cap.read()
+        if not ret:
+            return DuoVisionResult()
+
+        if self.hands is None:
+            return DuoVisionResult(frame=frame)
+
+        frame = cv2.flip(frame, 1)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        results = self.hands.process(rgb)
+        rgb.flags.writeable = True
+
+        landmarks_list = list(results.multi_hand_landmarks) if results.multi_hand_landmarks else []
+        raw_result = classify_duo_hands(landmarks_list, frame=frame)
+
+        if raw_result.left.detected and raw_result.left.index_tip_norm is not None:
+            raw_result.left.index_tip_norm = self.duo_left_smoother.update(raw_result.left.index_tip_norm)
+        else:
+            self.duo_left_smoother.reset()
+            self.duo_left_pinch_trigger.update(False, now)
+
+        if raw_result.right.detected and raw_result.right.index_tip_norm is not None:
+            raw_result.right.index_tip_norm = self.duo_right_smoother.update(raw_result.right.index_tip_norm)
+        else:
+            self.duo_right_smoother.reset()
+            self.duo_right_pinch_trigger.update(False, now)
+
+        left_pinch = False
+        right_pinch = False
+        for landmarks in landmarks_list:
+            index_tip = landmarks.landmark[8]
+            thumb_tip = landmarks.landmark[4]
+            pinch_active = (
+                distance_sq((index_tip.x, index_tip.y), (thumb_tip.x, thumb_tip.y))
+                < config.PINCH_THRESHOLD * config.PINCH_THRESHOLD
+            )
+            if index_tip.x < 0.5:
+                left_pinch = left_pinch or self.duo_left_pinch_trigger.update(pinch_active, now)
+            elif index_tip.x > 0.5:
+                right_pinch = right_pinch or self.duo_right_pinch_trigger.update(pinch_active, now)
+
+        raw_result.left.pinch_clicked = left_pinch
+        raw_result.right.pinch_clicked = right_pinch
+        self._draw_duo_preview(frame, landmarks_list)
+        return raw_result
 
     def _select_active_hand(
         self, candidates: Sequence[tuple[tuple[float, float], Any]], now: float
@@ -239,7 +409,27 @@ class VisionSystem:
                 self.drawer.DrawingSpec(color=line_color, thickness=2, circle_radius=2),
             )
 
+    def _draw_duo_preview(self, frame: np.ndarray, landmarks_list: Sequence[Any]) -> None:
+        if self.drawer is None or self.mp_hands is None:
+            return
+        for landmarks in landmarks_list:
+            index_tip = landmarks.landmark[8]
+            if index_tip.x < 0.5:
+                point_color = (0, 255, 0)
+            elif index_tip.x > 0.5:
+                point_color = (255, 160, 40)
+            else:
+                point_color = (0, 255, 255)
+            self.drawer.draw_landmarks(
+                frame,
+                landmarks,
+                self.mp_hands.HAND_CONNECTIONS,
+                self.drawer.DrawingSpec(color=point_color, thickness=2, circle_radius=2),
+                self.drawer.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2),
+            )
+
     def release(self) -> None:
+        self.stop_duo_thread()
         if self.cap.isOpened():
             self.cap.release()
         if self.hands is not None:

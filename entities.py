@@ -148,12 +148,19 @@ class Snake:
 
     def update(self, dt: float, speed: float, wrap: bool = False) -> None:
         previous_head = pygame.Vector2(self.head_pos)
-        self.head_pos = move_toward(self.head_pos, self.target_pos, speed * dt)
-        movement = self.head_pos - previous_head
+        old_body = list(self.body)
+        next_head = move_toward(self.head_pos, self.target_pos, speed * dt)
+        movement = next_head - previous_head
         if movement.length_squared() > 0:
             self.direction = movement.normalize()
+        self.head_pos = next_head
         if wrap:
-            self.head_pos = wrap_in_game_area(self.head_pos)
+            wrapped_head = wrap_in_game_area(self.head_pos, margin=config.SNAKE_RADIUS)
+            if wrapped_head != self.head_pos:
+                self.head_pos = wrapped_head
+                self.target_pos = pygame.Vector2(self.head_pos) + self.direction * 70
+                self.body = [pygame.Vector2(self.head_pos)] + old_body[: max(0, self.target_segments - 1)]
+                return
         extend_body_trail(self.body, previous_head, self.head_pos, self.target_segments)
 
     def grow(self, amount: int) -> None:
@@ -174,7 +181,11 @@ class Snake:
         self.body = [pygame.Vector2(self.head_pos)] + old_body[: max(0, self.target_segments - 1)]
 
     def wrap_head(self) -> None:
-        self.head_pos = wrap_in_game_area(self.head_pos)
+        wrapped_head = wrap_in_game_area(self.head_pos, margin=config.SNAKE_RADIUS)
+        if wrapped_head != self.head_pos:
+            old_body = list(self.body)
+            self.head_pos = wrapped_head
+            self.body = [pygame.Vector2(self.head_pos)] + old_body[: max(0, self.target_segments - 1)]
 
     def hits_self(self) -> bool:
         if len(self.body) < 20:

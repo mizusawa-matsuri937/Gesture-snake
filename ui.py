@@ -180,6 +180,42 @@ class GameUI:
                     ),
                 )
             self.draw_snake(mode.snake)
+        elif mode_name == "duo":
+            for wall in mode.moving_walls:
+                self.draw_moving_wall_track(wall)
+            for wall in mode.walls:
+                self.draw_wall(wall)
+            for wall in mode.moving_walls:
+                self.draw_moving_wall(wall)
+            for portal in mode.portals:
+                self.draw_portal_pair(portal, now)
+            self.draw_apple(mode.normal_food)
+            if mode.big_food:
+                if int(now * 8) % 2 == 0 or mode.big_food.remaining(now) > 2.0:
+                    self.draw_apple(mode.big_food, big=True)
+                remaining = self.font_small.render(
+                    f"{mode.big_food.remaining(now):.1f}s",
+                    True,
+                    config.COLOR_WARNING,
+                )
+                self.screen.blit(
+                    remaining,
+                    remaining.get_rect(
+                        center=(int(mode.big_food.position.x), int(mode.big_food.position.y) - 44)
+                    ),
+                )
+            self.draw_snake(
+                mode.green.snake,
+                mode.green.body_color,
+                mode.green.body_alt_color,
+                mode.green.outline_color,
+            )
+            self.draw_snake(
+                mode.blue.snake,
+                mode.blue.body_color,
+                mode.blue.body_alt_color,
+                mode.blue.outline_color,
+            )
 
     def draw_wall(self, wall: Wall) -> None:
         pygame.draw.rect(self.screen, wall.color, wall.rect, border_radius=3)
@@ -222,15 +258,21 @@ class GameUI:
         if big:
             pygame.draw.circle(self.screen, config.COLOR_WARNING, pos, food.radius + 8, 2)
 
-    def draw_snake(self, snake: Snake) -> None:
+    def draw_snake(
+        self,
+        snake: Snake,
+        body_color: tuple[int, int, int] = config.COLOR_SNAKE_BODY,
+        body_alt_color: tuple[int, int, int] = config.COLOR_SNAKE_BODY_ALT,
+        outline_color: tuple[int, int, int] = config.COLOR_SNAKE_OUTLINE,
+    ) -> None:
         for i, pos in enumerate(reversed(snake.body)):
             x, y = int(pos.x), int(pos.y)
-            color = config.COLOR_SNAKE_BODY if i % 2 == 0 else config.COLOR_SNAKE_BODY_ALT
-            pygame.draw.circle(self.screen, config.COLOR_SNAKE_OUTLINE, (x, y), config.SNAKE_RADIUS + 2)
+            color = body_color if i % 2 == 0 else body_alt_color
+            pygame.draw.circle(self.screen, outline_color, (x, y), config.SNAKE_RADIUS + 2)
             pygame.draw.circle(self.screen, color, (x, y), config.SNAKE_RADIUS)
 
         hx, hy = int(snake.head_pos.x), int(snake.head_pos.y)
-        pygame.draw.circle(self.screen, config.COLOR_SNAKE_OUTLINE, (hx, hy), config.SNAKE_RADIUS + 4)
+        pygame.draw.circle(self.screen, outline_color, (hx, hy), config.SNAKE_RADIUS + 4)
         pygame.draw.circle(self.screen, config.COLOR_SNAKE_HEAD, (hx, hy), config.SNAKE_RADIUS + 2)
 
         facing = snake.direction.normalize() if snake.direction.length_squared() else pygame.Vector2(1, 0)
@@ -259,11 +301,25 @@ class GameUI:
             text = self.font_med.render(msg, True, config.COLOR_DANGER)
             self.screen.blit(text, text.get_rect(center=panel.center))
 
-        border_color = config.COLOR_SUCCESS if result.detected else config.COLOR_DANGER
+        duo_ready = mode_name == "duo" and getattr(result, "ready", False)
+        detected = getattr(result, "detected", False)
+        border_color = config.COLOR_SUCCESS if (duo_ready or (mode_name != "duo" and detected)) else config.COLOR_DANGER
         pygame.draw.rect(self.screen, border_color, panel, 3)
+        if mode_name == "duo":
+            pygame.draw.line(
+                self.screen,
+                config.COLOR_WARNING,
+                (panel.centerx, panel.top),
+                (panel.centerx, panel.bottom),
+                2,
+            )
 
-        status = "Hand locked" if result.detected else "Waiting for hand"
-        status_color = config.COLOR_SUCCESS if result.detected else config.COLOR_WARNING
+        if mode_name == "duo":
+            status = "Both ready" if duo_ready else (getattr(result, "pause_reason", "") or "Waiting for players")
+            status_color = config.COLOR_SUCCESS if duo_ready else config.COLOR_WARNING
+        else:
+            status = "Hand locked" if detected else "Waiting for hand"
+            status_color = config.COLOR_SUCCESS if detected else config.COLOR_WARNING
         status_text = self.font_small.render(status, True, status_color)
         self.screen.blit(status_text, (margin, panel.bottom + int(12 * config.LAYOUT_SCALE)))
 
@@ -274,6 +330,9 @@ class GameUI:
         elif mode_name == "single_challenge":
             self.draw_single_challenge_stat_panel(mode, y, now, sensitivity_label)
             self.draw_single_challenge_help_text()
+        elif mode_name == "duo":
+            self.draw_duo_stat_panel(mode, y, now, status)
+            self.draw_duo_help_text()
         else:
             self.draw_single_stat_panel(mode, y, now, sensitivity_label)
             self.draw_single_help_text()
@@ -374,6 +433,37 @@ class GameUI:
             )
             self.screen.blit(bonus, (panel.x + int(18 * config.LAYOUT_SCALE), y + int(235 * config.LAYOUT_SCALE)))
 
+    def draw_duo_stat_panel(self, mode, y: int, now: float, status: str) -> None:
+        if mode is None:
+            labels = [
+                ("Mode", "Duo Battle"),
+                ("Camera", status),
+                ("Sensitivity", "Fixed x8"),
+                ("Maps", "5 choices"),
+            ]
+            self._draw_stat_box(y, labels, height=int(170 * config.LAYOUT_SCALE))
+            return
+
+        minutes = int(mode.remaining_seconds) // 60
+        seconds = int(mode.remaining_seconds) % 60
+        reason = mode.pause_reason or ("Complete" if mode.status == "finished" else "Active")
+        labels = [
+            ("Map", f"{mode.display_level_number}. {mode.challenge_name}"),
+            ("Time", f"{minutes}:{seconds:02d}"),
+            ("Green", str(mode.green.score)),
+            ("Blue", str(mode.blue.score)),
+            ("Status", mode.status.title()),
+            ("Reason", reason),
+        ]
+        self._draw_stat_box(y, labels, height=int(220 * config.LAYOUT_SCALE))
+        if mode.big_food:
+            remain = self.font_tiny.render(
+                f"Big apple {mode.big_food.remaining(now):.1f}s",
+                True,
+                config.COLOR_WARNING,
+            )
+            self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(194 * config.LAYOUT_SCALE)))
+
     def _draw_stat_row(self, panel: pygame.Rect, y: int, label: str, value: str) -> None:
         ltxt = self.font_small.render(label, True, config.COLOR_TEXT_MUTED)
         vtxt = self.font_small.render(value, True, config.COLOR_ACCENT)
@@ -430,6 +520,17 @@ class GameUI:
         ]
         self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
+    def draw_duo_help_text(self) -> None:
+        lines = [
+            "Duo Battle",
+            "Left half: green snake",
+            "Right half: blue snake",
+            "Edges wrap, obstacles are deadly",
+            "Head hits end the match",
+            "Timer pauses when tracking fails",
+        ]
+        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
+
     def draw_level_help_text(self) -> None:
         lines = [
             "Level Rules",
@@ -468,6 +569,28 @@ class GameUI:
         for _, button in back_buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
+    def draw_duo_control_select(self, buttons, nav_buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_title.render("Duo Mode", True, config.COLOR_TEXT)
+        sub = self.font_med.render("Choose a control setup", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.17))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.26))))
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+        for _, button in nav_buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_duo_level_select(self, level_buttons, back_buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_title.render("Duo Maps", True, config.COLOR_TEXT)
+        sub = self.font_med.render("Shared camera battle. Pick an endless map.", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.14))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.22))))
+        for _, button in level_buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+        for _, button in back_buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
     def draw_options(self, buttons, cursor_pos, mouse_pos, sensitivity_label: str) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         title = self.font_big.render("Options", True, config.COLOR_TEXT)
@@ -495,6 +618,7 @@ class GameUI:
         )
 
     def draw_gameover(self, buttons, cursor_pos, mouse_pos, mode_name: str, mode) -> None:
+        title = "Game Over"
         if mode_name == "level":
             subtitle = f"Reached Level {mode.display_level_number}"
             stats = f"Total Score {mode.total_score}"
@@ -503,11 +627,16 @@ class GameUI:
             subtitle = f"{mode.challenge_name} Score {mode.score}"
             stats = f"Apples {mode.apples_eaten}"
             hint_text = "Restart, choose another challenge, or return to menu."
+        elif mode_name == "duo":
+            title = "Duo Result"
+            subtitle = mode.result_label
+            stats = f"Green {mode.green.score}  Blue {mode.blue.score}"
+            hint_text = "Restart, choose another map, or return to menu."
         else:
             subtitle = f"Score {mode.score}"
             stats = f"Apples {mode.apples_eaten}"
             hint_text = "Use the peace sign or press Restart."
-        self.draw_overlay_panel("Game Over", [subtitle, stats, hint_text], config.COLOR_DANGER)
+        self.draw_overlay_panel(title, [subtitle, stats, hint_text], config.COLOR_DANGER)
         hint = self.font_small.render("", True, config.COLOR_TEXT_MUTED)
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         self.screen.blit(hint, hint.get_rect(center=(center_x, 0)))

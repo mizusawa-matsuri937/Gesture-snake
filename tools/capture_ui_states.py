@@ -14,7 +14,7 @@ import pygame
 
 import config
 from game import Game
-from vision import VisionResult
+from vision import DuoPlayerVision, DuoVisionResult, VisionResult
 
 
 REQUIRED_STATES = [
@@ -39,6 +39,13 @@ REQUIRED_STATES = [
     "gameover_single_challenge",
     "gameover_level",
     "level_clear",
+    "duo_control_select",
+    "duo_level_select",
+    "duo_waiting",
+    "duo_playing",
+    "duo_paused",
+    "duo_gameover",
+    "duo_separate_coming_soon",
 ]
 
 
@@ -46,7 +53,6 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     config.configure_layout(config.WINDOWED_SIZE)
     game = Game(fullscreen=False, use_camera=False)
-    result = VisionResult(detected=False)
     mouse_pos = (0, 0)
     now = 8.0
     captures: dict[str, Path] = {}
@@ -75,10 +81,18 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
         "gameover_single_challenge": lambda: _set_gameover_single_challenge(game),
         "gameover_level": lambda: _set_gameover_level(game),
         "level_clear": lambda: _set_level_clear(game),
+        "duo_control_select": lambda: _set_state(game, config.STATE_DUO_CONTROL_SELECT, "duo"),
+        "duo_level_select": lambda: _set_state(game, config.STATE_DUO_LEVEL_SELECT, "duo"),
+        "duo_waiting": lambda: _set_duo_waiting(game, now),
+        "duo_playing": lambda: _set_duo_playing(game, now),
+        "duo_paused": lambda: _set_duo_paused(game, now),
+        "duo_gameover": lambda: _set_duo_gameover(game, now),
+        "duo_separate_coming_soon": lambda: _set_state(game, config.STATE_COMING_SOON, "duo"),
     }
 
     for state in REQUIRED_STATES:
         state_setup[state]()
+        result = _result_for_state(state)
         game.draw(result, None, mouse_pos, now)
         path = output_dir / f"{state}.png"
         pygame.image.save(game.screen, str(path))
@@ -164,6 +178,60 @@ def _set_level_clear(game: Game) -> None:
     game.level_mode.clear_started_at = 8.0
     game.state = config.STATE_LEVEL_CLEAR
     game.active_mode_name = "level"
+
+
+def _duo_result(ready: bool = True) -> DuoVisionResult:
+    if not ready:
+        return DuoVisionResult(pause_reason="Right hand lost")
+    return DuoVisionResult(
+        left=DuoPlayerVision(detected=True, index_tip_norm=(0.35, 0.5), raw_index_tip_norm=(0.175, 0.5)),
+        right=DuoPlayerVision(detected=True, index_tip_norm=(0.65, 0.5), raw_index_tip_norm=(0.825, 0.5)),
+    )
+
+
+def _result_for_state(state: str):
+    if not state.startswith("duo"):
+        return VisionResult(detected=False)
+    if state == "duo_paused":
+        return _duo_result(ready=False)
+    if state in {"duo_waiting", "duo_playing", "duo_gameover"}:
+        return _duo_result()
+    return DuoVisionResult(pause_reason="Waiting for players")
+
+
+def _set_duo_waiting(game: Game, now: float) -> None:
+    game.duo_mode.select_level(0, now)
+    game.duo_mode.pause_reason = "Waiting for both players"
+    game.state = config.STATE_DUO_WAITING
+    game.active_mode_name = "duo"
+
+
+def _set_duo_playing(game: Game, now: float) -> None:
+    game.duo_mode.select_level(2, now)
+    game.duo_mode.started = True
+    game.duo_mode.status = "playing"
+    game.duo_mode.pause_reason = ""
+    game.duo_mode.elapsed_seconds = 45.0
+    game.duo_mode.green.score = 80
+    game.duo_mode.blue.score = 60
+    game.duo_mode.update_moving_walls(now)
+    game.state = config.STATE_PLAYING_DUO
+    game.active_mode_name = "duo"
+
+
+def _set_duo_paused(game: Game, now: float) -> None:
+    _set_duo_playing(game, now)
+    game.duo_mode.status = "paused"
+    game.duo_mode.pause_reason = "Right hand lost"
+
+
+def _set_duo_gameover(game: Game, now: float) -> None:
+    _set_duo_playing(game, now)
+    game.duo_mode.green.score = 120
+    game.duo_mode.blue.score = 90
+    game.duo_mode.finish(())
+    game.state = config.STATE_DUO_GAMEOVER
+    game.active_mode_name = "duo"
 
 
 def main() -> None:

@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -30,6 +31,30 @@ from utils import (
     wrap_in_game_area,
 )
 from vision import CameraSettings, GestureTrigger, VisionResult, should_pause_for_tracking
+
+
+class FakeLandmarkPoint:
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+
+
+class FakeHandLandmarks:
+    def __init__(self, index_x: float, index_y: float = 0.5, thumb_x: Optional[float] = None):
+        self.landmark = [FakeLandmarkPoint(index_x, index_y) for _ in range(21)]
+        self.landmark[4] = FakeLandmarkPoint(index_x if thumb_x is None else thumb_x, index_y)
+        self.landmark[8] = FakeLandmarkPoint(index_x, index_y)
+        for index in (0, 5, 9, 13, 17):
+            self.landmark[index] = FakeLandmarkPoint(index_x, index_y)
+
+
+def duo_result(left: Optional[tuple[float, float]] = (0.25, 0.5), right: Optional[tuple[float, float]] = (0.75, 0.5)):
+    from vision import DuoPlayerVision, DuoVisionResult
+
+    return DuoVisionResult(
+        left=DuoPlayerVision(detected=left is not None, index_tip_norm=left),
+        right=DuoPlayerVision(detected=right is not None, index_tip_norm=right),
+    )
 
 
 class FontLoadingTests(unittest.TestCase):
@@ -86,6 +111,26 @@ class GameRuleTests(unittest.TestCase):
 
         self.assertEqual(wrapped.x, config.SIDEBAR_WIDTH + 12)
         self.assertEqual(wrapped.y, config.WINDOW_HEIGHT - 9)
+
+    def test_wrap_position_can_use_snake_radius_as_boundary_margin(self):
+        radius = config.SNAKE_RADIUS
+
+        wrapped_right = wrap_in_game_area(
+            pygame.Vector2(config.WINDOW_WIDTH - radius + 7, 400),
+            margin=radius,
+        )
+        wrapped_left = wrap_in_game_area(
+            pygame.Vector2(config.SIDEBAR_WIDTH + radius - 9, 400),
+            margin=radius,
+        )
+        wrapped_top = wrap_in_game_area(
+            pygame.Vector2(config.SIDEBAR_WIDTH + 200, radius - 6),
+            margin=radius,
+        )
+
+        self.assertEqual(wrapped_right.x, config.SIDEBAR_WIDTH + radius + 7)
+        self.assertEqual(wrapped_left.x, config.WINDOW_WIDTH - radius - 9)
+        self.assertEqual(wrapped_top.y, config.WINDOW_HEIGHT - radius - 6)
 
     def test_index_tip_maps_to_right_game_area_target(self):
         top_left = index_to_game_target((0.0, 0.0))
@@ -297,6 +342,92 @@ class GameFlowTests(unittest.TestCase):
             game.vision.release()
             pygame.quit()
 
+    def test_duo_mode_opens_control_select(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            _, duo_button = game.menu_buttons[3]
+
+            game._handle_menu(VisionResult(), None, duo_button.rect.center, True, now=1.0)
+
+            self.assertEqual(game.state, config.STATE_DUO_CONTROL_SELECT)
+            self.assertEqual([action for action, _ in game.duo_control_buttons], ["shared", "separate"])
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_shared_camera_duo_flow_selects_map_and_starts_waiting(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_DUO_CONTROL_SELECT
+            shared_button = dict(game.duo_control_buttons)["shared"]
+
+            game._handle_duo_control_select(
+                VisionResult(),
+                None,
+                shared_button.rect.center,
+                True,
+            )
+
+            self.assertEqual(game.state, config.STATE_DUO_LEVEL_SELECT)
+            self.assertEqual(len(game.duo_level_buttons), 5)
+
+            _, map_button = game.duo_level_buttons[2]
+            game._handle_duo_level_select(
+                VisionResult(),
+                None,
+                map_button.rect.center,
+                True,
+                now=2.0,
+            )
+
+            self.assertEqual(game.state, config.STATE_DUO_WAITING)
+            self.assertEqual(game.active_mode_name, "duo")
+            self.assertEqual(game.duo_mode.level_index, 2)
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_separate_camera_duo_entry_opens_coming_soon(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_DUO_CONTROL_SELECT
+            separate_button = dict(game.duo_control_buttons)["separate"]
+
+            game._handle_duo_control_select(
+                VisionResult(),
+                None,
+                separate_button.rect.center,
+                True,
+            )
+
+            self.assertEqual(game.state, config.STATE_COMING_SOON)
+            self.assertEqual(game.active_mode_name, "duo")
+        finally:
+            game.vision.release()
+            pygame.quit()
+
+    def test_gameover_buttons_for_duo_restart_select_and_menu(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.start_duo_mode(1, now=1.0)
+            game.state = config.STATE_DUO_GAMEOVER
+            game.active_mode_name = "duo"
+
+            actions = [action for action, _ in game.gameover_buttons_for_active_mode()]
+
+            self.assertEqual(actions, ["restart", "level_select", "menu"])
+        finally:
+            game.vision.release()
+            pygame.quit()
+
 
 class UILayoutTests(unittest.TestCase):
     def test_camera_preview_preserves_widescreen_aspect_ratio(self):
@@ -339,6 +470,13 @@ class UILayoutTests(unittest.TestCase):
         self.assertIn("level_3_moving_walls", REQUIRED_STATES)
         self.assertIn("level_4_portals", REQUIRED_STATES)
         self.assertIn("level_5_mixed", REQUIRED_STATES)
+        self.assertIn("duo_control_select", REQUIRED_STATES)
+        self.assertIn("duo_level_select", REQUIRED_STATES)
+        self.assertIn("duo_waiting", REQUIRED_STATES)
+        self.assertIn("duo_playing", REQUIRED_STATES)
+        self.assertIn("duo_paused", REQUIRED_STATES)
+        self.assertIn("duo_gameover", REQUIRED_STATES)
+        self.assertIn("duo_separate_coming_soon", REQUIRED_STATES)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
@@ -402,6 +540,32 @@ class UILayoutTests(unittest.TestCase):
         finally:
             pygame.quit()
 
+    def test_duo_sidebar_draws_scores_without_target_progress(self):
+        from ui import GameUI
+        from modes.duo_mode import DuoMode
+
+        pygame.init()
+        try:
+            screen = pygame.Surface(config.WINDOWED_SIZE)
+            ui = GameUI(screen)
+            mode = DuoMode(level_index=1, rng=random.Random(19))
+            mode.green.score = 30
+            mode.blue.score = -100
+
+            ui.draw_sidebar(
+                duo_result(),
+                mode,
+                "duo",
+                now=5.0,
+                sensitivity_label="Duo x8",
+                camera_ready=False,
+            )
+
+            self.assertFalse(hasattr(mode, "target_score"))
+            self.assertFalse(hasattr(mode, "progress_ratio"))
+        finally:
+            pygame.quit()
+
 
 class GestureDebouncerTests(unittest.TestCase):
     def test_gesture_trigger_fires_only_on_rising_edge_and_cooldown(self):
@@ -431,6 +595,52 @@ class ActiveHandSelectionTests(unittest.TestCase):
         hands = [((0.80, 0.80), "second")]
 
         self.assertIsNone(choose_nearest_hand(hands, previous, max_distance=0.20))
+
+
+class DuoVisionTests(unittest.TestCase):
+    def test_duo_hands_are_assigned_by_index_tip_half(self):
+        from vision import classify_duo_hands
+
+        result = classify_duo_hands(
+            [
+                FakeHandLandmarks(0.24, 0.45),
+                FakeHandLandmarks(0.76, 0.55),
+            ]
+        )
+
+        self.assertTrue(result.ready)
+        self.assertEqual(result.left.index_tip_norm, (0.48, 0.45))
+        self.assertEqual(result.right.index_tip_norm, (0.52, 0.55))
+        self.assertEqual(result.pause_reason, "")
+
+    def test_duo_hands_report_missing_side_when_both_are_in_one_half(self):
+        from vision import classify_duo_hands
+
+        result = classify_duo_hands(
+            [
+                FakeHandLandmarks(0.20, 0.40),
+                FakeHandLandmarks(0.35, 0.60),
+            ]
+        )
+
+        self.assertFalse(result.ready)
+        self.assertTrue(result.left.detected)
+        self.assertFalse(result.right.detected)
+        self.assertEqual(result.pause_reason, "Right hand lost")
+
+    def test_duo_hand_on_center_line_is_reported_as_crossed(self):
+        from vision import classify_duo_hands
+
+        result = classify_duo_hands(
+            [
+                FakeHandLandmarks(0.50, 0.45),
+                FakeHandLandmarks(0.76, 0.55),
+            ]
+        )
+
+        self.assertFalse(result.ready)
+        self.assertTrue(result.crossed_line)
+        self.assertEqual(result.pause_reason, "Finger crossed center line")
 
 
 class LevelModeTests(unittest.TestCase):
@@ -535,11 +745,12 @@ class LevelModeTests(unittest.TestCase):
 
     def test_single_mode_still_wraps_at_boundaries(self):
         mode = SingleMode(rng=random.Random(2))
-        mode.snake.head_pos = pygame.Vector2(config.WINDOW_WIDTH + 12, -9)
+        radius = config.SNAKE_RADIUS
+        mode.snake.head_pos = pygame.Vector2(config.WINDOW_WIDTH - radius + 12, radius - 9)
         mode.wrap_snake_head()
 
-        self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + 12)
-        self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - 9)
+        self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + radius + 12)
+        self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - radius - 9)
 
     def test_level_food_does_not_spawn_inside_wall(self):
         wall = Wall(pygame.Rect(config.SIDEBAR_WIDTH + 80, 80, 600, 500))
@@ -717,11 +928,12 @@ class EndlessChallengeModeTests(unittest.TestCase):
         from modes.endless_challenge_mode import EndlessChallengeMode
 
         mode = EndlessChallengeMode(level_index=1, rng=random.Random(15))
-        mode.snake.head_pos = pygame.Vector2(config.WINDOW_WIDTH + 12, -9)
+        radius = config.SNAKE_RADIUS
+        mode.snake.head_pos = pygame.Vector2(config.WINDOW_WIDTH - radius + 12, radius - 9)
         mode.wrap_snake_head()
 
-        self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + 12)
-        self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - 9)
+        self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + radius + 12)
+        self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - radius - 9)
 
         wall = mode.walls[0]
         mode.snake.head_pos = pygame.Vector2(wall.rect.center)
@@ -784,6 +996,127 @@ class EndlessChallengeModeTests(unittest.TestCase):
         self.assertEqual(mode.snake.head_pos, first_exit)
 
 
+class DuoModeTests(unittest.TestCase):
+    def test_duo_config_exposes_match_rules(self):
+        self.assertEqual(config.DUO_MATCH_SECONDS, 180.0)
+        self.assertEqual(config.DUO_SENSITIVITY, 8.0)
+        self.assertEqual(config.DUO_READY_HOLD_SECONDS, 0.5)
+        self.assertEqual(config.DUO_DEATH_PENALTY, 100)
+
+    def test_duo_mode_waits_for_both_players_before_starting(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(20))
+
+        self.assertIsNone(mode.update(duo_result(left=None), dt=0.0, now=1.0))
+        self.assertFalse(mode.started)
+        self.assertEqual(mode.status, "waiting")
+
+        self.assertIsNone(mode.update(duo_result(), dt=0.0, now=2.0))
+        self.assertFalse(mode.started)
+        self.assertIsNone(mode.update(duo_result(), dt=0.0, now=2.6))
+
+        self.assertTrue(mode.started)
+        self.assertEqual(mode.status, "playing")
+        self.assertEqual(mode.remaining_seconds, config.DUO_MATCH_SECONDS)
+
+    def test_duo_pause_freezes_match_timer(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(21))
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        mode.update(duo_result(), dt=1.5, now=3.1)
+        elapsed_before_pause = mode.elapsed_seconds
+
+        mode.update(duo_result(right=None), dt=5.0, now=8.1)
+
+        self.assertEqual(mode.status, "paused")
+        self.assertEqual(mode.pause_reason, "Right hand lost")
+        self.assertEqual(mode.elapsed_seconds, elapsed_before_pause)
+
+    def test_duo_match_finishes_when_timer_expires_and_allows_draw(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(22))
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        mode.elapsed_seconds = config.DUO_MATCH_SECONDS - 0.2
+
+        event = mode.update(duo_result(), dt=0.3, now=2.0)
+
+        self.assertEqual(event, "gameover")
+        self.assertEqual(mode.status, "finished")
+        self.assertEqual(mode.winner, "draw")
+        self.assertEqual(mode.result_label, "Draw")
+
+    def test_duo_shared_food_scores_for_eating_player_and_spawns_big_food_globally(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(23))
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        mode.apples_eaten = config.BIG_FOOD_EVERY - 1
+        mode.normal_food.position = pygame.Vector2(mode.green.snake.head_pos)
+        old_segments = mode.green.snake.target_segments
+
+        mode.update(duo_result(), dt=0.0, now=2.0)
+
+        self.assertEqual(mode.green.score, config.NORMAL_FOOD_SCORE)
+        self.assertEqual(mode.blue.score, 0)
+        self.assertEqual(mode.green.snake.target_segments, old_segments + config.NORMAL_GROWTH)
+        self.assertEqual(mode.apples_eaten, config.BIG_FOOD_EVERY)
+        self.assertIsNotNone(mode.big_food)
+        self.assertEqual(mode.big_food.duration, config.BIG_FOOD_DURATION)
+
+    def test_duo_wall_death_deducts_penalty_and_ends_match(self):
+        from modes.duo_mode import DuoMode
+
+        wall = pygame.Rect(config.SIDEBAR_WIDTH + 120, 200, 80, 40)
+        mode = DuoMode(
+            level_index=0,
+            levels=[{"name": "Wall Duel", "target_score": 10, "walls": [wall]}],
+            rng=random.Random(24),
+        )
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        mode.green.snake.head_pos = pygame.Vector2(wall.center)
+
+        event = mode.update(duo_result(), dt=0.0, now=2.0)
+
+        self.assertEqual(event, "gameover")
+        self.assertEqual(mode.green.score, -config.DUO_DEATH_PENALTY)
+        self.assertEqual(mode.winner, "blue")
+
+    def test_duo_head_collision_deducts_both_players_and_draws(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(25))
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        center = pygame.Vector2(config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2, config.WINDOW_HEIGHT // 2)
+        mode.green.snake.head_pos = center
+        mode.blue.snake.head_pos = center + pygame.Vector2(config.SNAKE_RADIUS, 0)
+
+        event = mode.update(duo_result(), dt=0.0, now=2.0)
+
+        self.assertEqual(event, "gameover")
+        self.assertEqual(mode.green.score, -config.DUO_DEATH_PENALTY)
+        self.assertEqual(mode.blue.score, -config.DUO_DEATH_PENALTY)
+        self.assertEqual(mode.winner, "draw")
+
+    def test_duo_portal_cooldown_is_independent_per_snake(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=3, rng=random.Random(26))
+        portal = mode.portals[0]
+        mode.green.snake.head_pos = pygame.Vector2(portal.a_center.x + 5, portal.a_center.y)
+        mode.blue.snake.head_pos = pygame.Vector2(portal.a_center.x - 5, portal.a_center.y)
+
+        self.assertTrue(mode.apply_portals_for(mode.green, now=10.0))
+        self.assertTrue(mode.apply_portals_for(mode.blue, now=10.1))
+
+
 class SnakeEntityTests(unittest.TestCase):
     def test_snake_moves_smoothly_toward_target_and_tracks_body(self):
         snake = Snake()
@@ -794,6 +1127,19 @@ class SnakeEntityTests(unittest.TestCase):
 
         self.assertEqual(snake.head_pos, start + pygame.Vector2(20, 0))
         self.assertGreater(len(snake.body), 1)
+
+    def test_snake_wraps_by_head_radius_without_cross_map_body_trail(self):
+        radius = config.SNAKE_RADIUS
+        start = pygame.Vector2(config.WINDOW_WIDTH - radius - 2, 400)
+        snake = Snake(start)
+        old_body = list(snake.body)
+        snake.target_pos = pygame.Vector2(config.WINDOW_WIDTH + 100, 400)
+
+        snake.update(dt=0.1, speed=100, wrap=True)
+
+        self.assertEqual(snake.head_pos, pygame.Vector2(config.SIDEBAR_WIDTH + radius + 8, 400))
+        self.assertEqual(snake.body[0], snake.head_pos)
+        self.assertEqual(snake.body[1:], old_body[:-1])
 
 
 if __name__ == "__main__":

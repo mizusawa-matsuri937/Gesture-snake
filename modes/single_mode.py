@@ -8,7 +8,7 @@ import pygame
 
 import config
 from entities import BigFood, Food, Snake
-from utils import index_to_game_target, wrap_in_game_area
+from utils import index_to_game_target
 from vision import VisionResult
 
 
@@ -53,7 +53,7 @@ class SingleMode:
         return current_speed_for_apples(self.apples_eaten)
 
     def wrap_snake_head(self) -> None:
-        self.snake.head_pos = wrap_in_game_area(self.snake.head_pos)
+        self.snake.wrap_head()
 
     def update(
         self,

@@ -10,6 +10,7 @@ import config
 from entities import BigFood, Food, Snake
 from modes.obstacle_helpers import ObstacleLayoutMixin
 from modes.single_mode import current_speed_for_apples
+from summary import PerformanceTracker
 from utils import index_to_game_target
 from vision import VisionResult
 
@@ -28,6 +29,7 @@ class EndlessChallengeMode(ObstacleLayoutMixin):
         self.level_index = max(0, min(level_index, len(self.challenges) - 1))
         self.score = 0
         self.apples_eaten = 0
+        self.summary = PerformanceTracker()
         self.invincible_until = 0.0
         self.portal_cooldown_until = 0.0
         self.snake = Snake(self.spawn_point())
@@ -85,6 +87,7 @@ class EndlessChallengeMode(ObstacleLayoutMixin):
     def reset(self, now: float) -> None:
         self.score = 0
         self.apples_eaten = 0
+        self.summary.reset()
         self.walls = self._make_walls(self.current_level.get("walls", []))
         self.moving_walls = self._make_moving_walls(self.current_level.get("moving_walls", []))
         self.portals = self._make_portals(self.current_level.get("portals", []))
@@ -105,6 +108,7 @@ class EndlessChallengeMode(ObstacleLayoutMixin):
         now: float,
         sensitivity: float,
     ) -> Optional[str]:
+        self.summary.record_frame(dt, result.detected, self.current_speed)
         self.update_moving_walls(now)
         if self.big_food and self.big_food.is_expired(now):
             self.big_food = None
@@ -131,6 +135,7 @@ class EndlessChallengeMode(ObstacleLayoutMixin):
         if self.big_food and self.big_food.overlaps(self.snake.head_pos, config.SNAKE_RADIUS):
             self.score += self.big_food.score
             self.snake.grow(self.big_food.growth)
+            self.summary.record_big_apple()
             self.big_food = None
 
         return None

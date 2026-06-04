@@ -9,6 +9,7 @@ import pygame
 import config
 from entities import BigFood, Food, Snake
 from modes.obstacle_helpers import ObstacleLayoutMixin
+from summary import PerformanceTracker
 from utils import index_to_game_target
 from vision import VisionResult
 
@@ -32,6 +33,7 @@ class LevelMode(ObstacleLayoutMixin):
         self.level_score = 0
         self.total_score = 0
         self.apples_eaten = 0
+        self.summary = PerformanceTracker()
         self.clear_started_at: Optional[float] = None
         self.invincible_until = 0.0
         self.portal_cooldown_until = 0.0
@@ -85,19 +87,22 @@ class LevelMode(ObstacleLayoutMixin):
         self.level_score = 0
         self.total_score = 0
         self.apples_eaten = 0
+        self.summary.reset()
         self.clear_started_at = None
         self.portal_cooldown_until = 0.0
-        self.reset_level(0.0, keep_total=True)
+        self.reset_level(0.0, keep_total=True, reset_summary=True)
 
     def advance_level(self, now: float) -> None:
         if self.level_index < len(self.levels) - 1:
             self.level_index += 1
-        self.reset_level(now, keep_total=True)
+        self.reset_level(now, keep_total=True, reset_summary=False)
 
-    def reset_level(self, now: float, keep_total: bool = True) -> None:
+    def reset_level(self, now: float, keep_total: bool = True, reset_summary: bool = True) -> None:
         total = self.total_score if keep_total else 0
         self.level_score = 0
         self.apples_eaten = 0
+        if reset_summary:
+            self.summary.reset()
         self.total_score = total
         self.clear_started_at = None
         self.walls = self._make_walls(self.current_level.get("walls", []))
@@ -117,6 +122,7 @@ class LevelMode(ObstacleLayoutMixin):
         now: float,
         sensitivity: float,
     ) -> Optional[str]:
+        self.summary.record_frame(dt, result.detected, self.current_speed)
         self.update_moving_walls(now)
         if self.big_food and self.big_food.is_expired(now):
             self.big_food = None
@@ -148,6 +154,7 @@ class LevelMode(ObstacleLayoutMixin):
             self.level_score += self.big_food.score
             self.total_score += self.big_food.score
             self.snake.grow(self.big_food.growth)
+            self.summary.record_big_apple()
             self.big_food = None
             if self.reached_target_score():
                 self.clear_started_at = now

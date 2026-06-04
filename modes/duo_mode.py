@@ -11,6 +11,7 @@ import config
 from entities import BigFood, Food, Snake
 from modes.obstacle_helpers import ObstacleLayoutMixin
 from modes.single_mode import current_speed_for_apples
+from summary import PerformanceTracker
 from utils import distance_sq, index_to_game_target, inside_game_area, point_too_close_to_walls
 from vision import DuoVisionResult
 
@@ -62,6 +63,7 @@ class DuoMode(ObstacleLayoutMixin):
         self.normal_food = Food(start, 14, config.NORMAL_FOOD_SCORE, config.NORMAL_GROWTH, config.COLOR_FOOD)
         self.big_food: Optional[Food] = None
         self.apples_eaten = 0
+        self.summary = PerformanceTracker()
         self.elapsed_seconds = 0.0
         self.started = False
         self.status = "waiting"
@@ -120,6 +122,7 @@ class DuoMode(ObstacleLayoutMixin):
         self.green.portal_cooldown_until = 0.0
         self.blue.portal_cooldown_until = 0.0
         self.apples_eaten = 0
+        self.summary.reset()
         self.elapsed_seconds = 0.0
         self.started = False
         self.status = "waiting"
@@ -194,7 +197,13 @@ class DuoMode(ObstacleLayoutMixin):
             return False
         return avoid is None or (point - avoid).length_squared() >= 180 * 180
 
-    def update(self, result: DuoVisionResult, dt: float, now: float) -> Optional[str]:
+    def update(
+        self,
+        result: DuoVisionResult,
+        dt: float,
+        now: float,
+        target_sensitivity: float = config.DUO_SENSITIVITY,
+    ) -> Optional[str]:
         self.update_moving_walls(now)
         if self.big_food and self.big_food.is_expired(now):
             self.big_food = None
@@ -221,7 +230,8 @@ class DuoMode(ObstacleLayoutMixin):
 
         self.status = "playing"
         self.pause_reason = ""
-        self._apply_targets(result)
+        self.summary.record_frame(dt, result.ready, self.current_speed)
+        self._apply_targets(result, target_sensitivity)
 
         self.green.snake.update(dt, self.current_speed, wrap=True)
         self.blue.snake.update(dt, self.current_speed, wrap=True)
@@ -249,16 +259,16 @@ class DuoMode(ObstacleLayoutMixin):
             return "Right hand lost"
         return "Waiting for both players"
 
-    def _apply_targets(self, result: DuoVisionResult) -> None:
+    def _apply_targets(self, result: DuoVisionResult, target_sensitivity: float = config.DUO_SENSITIVITY) -> None:
         if result.left.index_tip_norm is not None:
             self.green.snake.target_pos = index_to_game_target(
                 result.left.index_tip_norm,
-                config.DUO_SENSITIVITY,
+                target_sensitivity,
             )
         if result.right.index_tip_norm is not None:
             self.blue.snake.target_pos = index_to_game_target(
                 result.right.index_tip_norm,
-                config.DUO_SENSITIVITY,
+                target_sensitivity,
             )
 
     def handle_food(self, now: float) -> None:
@@ -278,6 +288,7 @@ class DuoMode(ObstacleLayoutMixin):
             if self.big_food.overlaps(player.snake.head_pos, config.SNAKE_RADIUS):
                 player.score += self.big_food.score
                 player.snake.grow(self.big_food.growth)
+                self.summary.record_big_apple()
                 self.big_food = None
                 break
 

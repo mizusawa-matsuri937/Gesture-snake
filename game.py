@@ -8,6 +8,7 @@ import pygame
 import config
 from modes.duo_mode import DuoMode
 from modes.endless_challenge_mode import EndlessChallengeMode
+from modes.lan_duo_mode import LanDuoMode
 from modes.level_mode import LevelMode
 from modes.single_mode import SingleMode
 from ui import Button, GameUI
@@ -52,11 +53,13 @@ class Game:
         self.paused_state = config.STATE_PLAYING_SINGLE
         self.pause_reason: Optional[str] = None
         self.sensitivity_index = config.DEFAULT_SENSITIVITY_INDEX
+        self.lan_text_input_active = False
 
         self.single_mode = SingleMode()
         self.single_challenge_mode = EndlessChallengeMode()
         self.level_mode = LevelMode()
         self.duo_mode = DuoMode()
+        self.lan_duo_mode = LanDuoMode()
 
         self.menu_buttons: list[tuple[str, Button]] = []
         self.single_level_buttons: list[tuple[int, Button]] = []
@@ -65,12 +68,17 @@ class Game:
         self.duo_control_nav_buttons: list[tuple[str, Button]] = []
         self.duo_level_buttons: list[tuple[int, Button]] = []
         self.duo_level_select_buttons: list[tuple[str, Button]] = []
+        self.lan_menu_buttons: list[tuple[str, Button]] = []
+        self.lan_host_buttons: list[tuple[str, Button]] = []
+        self.lan_join_buttons: list[tuple[str, Button]] = []
+        self.lan_waiting_buttons: list[tuple[str, Button]] = []
         self.options_buttons: list[tuple[str, Button]] = []
         self.pause_buttons: list[tuple[str, Button]] = []
         self.pause_challenge_buttons: list[tuple[str, Button]] = []
         self.gameover_buttons: list[tuple[str, Button]] = []
         self.gameover_challenge_buttons: list[tuple[str, Button]] = []
         self.gameover_duo_buttons: list[tuple[str, Button]] = []
+        self.gameover_lan_buttons: list[tuple[str, Button]] = []
         self.coming_soon_buttons: list[tuple[str, Button]] = []
         self._create_buttons()
 
@@ -165,17 +173,34 @@ class Game:
                 ),
             ),
             (
-                "separate",
+                "lan",
                 Button(
                     pygame.Rect(center_x - w // 2, control_y + (h + gap), w, h),
-                    "Separate Cameras",
-                    "Coming Soon",
+                    "LAN Battle",
+                    "Two computers",
                     config.COLOR_WARNING,
                 ),
             ),
         ]
         self.duo_control_nav_buttons = [
             ("menu", Button(pygame.Rect(center_x - w // 2, control_y + 2 * (h + gap), w, h), "Back to Menu")),
+        ]
+        lan_y = int(config.WINDOW_HEIGHT * 0.38)
+        self.lan_menu_buttons = [
+            ("host", Button(pygame.Rect(center_x - w // 2, lan_y, w, h), "Host Game", "Player 1")),
+            ("join", Button(pygame.Rect(center_x - w // 2, lan_y + (h + gap), w, h), "Join Game", "Player 2")),
+            ("back", Button(pygame.Rect(center_x - w // 2, lan_y + 2 * (h + gap), w, h), "Back")),
+        ]
+        self.lan_host_buttons = [
+            ("start", Button(pygame.Rect(center_x - w // 2, lan_y + int(210 * scale), w, h), "Start Match")),
+            ("back", Button(pygame.Rect(center_x - w // 2, lan_y + int(210 * scale) + (h + gap), w, h), "Back")),
+        ]
+        self.lan_join_buttons = [
+            ("connect", Button(pygame.Rect(center_x - w // 2, lan_y + int(220 * scale), w, h), "Connect")),
+            ("back", Button(pygame.Rect(center_x - w // 2, lan_y + int(220 * scale) + (h + gap), w, h), "Back")),
+        ]
+        self.lan_waiting_buttons = [
+            ("back", Button(pygame.Rect(center_x - w // 2, lan_y + int(220 * scale), w, h), "Back")),
         ]
         option_y = int(config.WINDOW_HEIGHT * 0.50)
         self.options_buttons = [
@@ -233,6 +258,9 @@ class Game:
             ),
             ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y + 2 * (h + gap), w, h), "Main Menu")),
         ]
+        self.gameover_lan_buttons = [
+            ("lan_menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Back to LAN Menu")),
+        ]
         self.coming_soon_buttons = [
             ("menu", Button(pygame.Rect(center_x - w // 2, overlay_button_y, w, h), "Back to Menu")),
         ]
@@ -254,6 +282,8 @@ class Game:
             return self.single_challenge_mode
         if self.active_mode_name == "duo":
             return self.duo_mode
+        if self.active_mode_name == "lan_duo":
+            return self.lan_duo_mode
         return self.single_mode
 
     def run(self) -> None:
@@ -263,6 +293,7 @@ class Game:
             now = pygame.time.get_ticks() / 1000.0
             mouse_clicked = False
             mouse_pos = pygame.mouse.get_pos()
+            lan_connect_requested = False
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -271,8 +302,15 @@ class Game:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                     self.toggle_fullscreen()
+                elif event.type == pygame.KEYDOWN and self.state == config.STATE_LAN_DUO_JOIN:
+                    lan_connect_requested = self._handle_lan_key_event(event) or lan_connect_requested
+                elif event.type == pygame.TEXTINPUT and self.state == config.STATE_LAN_DUO_JOIN:
+                    self._handle_lan_text_input_event(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mouse_clicked = True
+
+            if self.state != config.STATE_LAN_DUO_JOIN and self.lan_text_input_active:
+                self._set_lan_text_input(False)
 
             if self._uses_duo_vision():
                 result = self.vision.update_duo(now)
@@ -291,6 +329,21 @@ class Game:
                 self._handle_duo_level_select(result, cursor_pos, mouse_pos, mouse_clicked, now)
             elif self.state == config.STATE_DUO_WAITING:
                 self._handle_duo_waiting(result, now)
+            elif self.state == config.STATE_LAN_DUO_MENU:
+                self._handle_lan_duo_menu(result, cursor_pos, mouse_pos, mouse_clicked, now)
+            elif self.state == config.STATE_LAN_DUO_HOST:
+                self._handle_lan_duo_host(result, cursor_pos, mouse_pos, mouse_clicked, now)
+            elif self.state == config.STATE_LAN_DUO_JOIN:
+                self._handle_lan_duo_join(
+                    result,
+                    cursor_pos,
+                    mouse_pos,
+                    mouse_clicked,
+                    now,
+                    lan_connect_requested,
+                )
+            elif self.state == config.STATE_LAN_DUO_WAITING:
+                self._handle_lan_duo_waiting(result, cursor_pos, mouse_pos, mouse_clicked, now)
             elif self.state == config.STATE_PLAYING_SINGLE:
                 self._handle_playing_single(result, dt, now)
             elif self.state == config.STATE_PLAYING_SINGLE_CHALLENGE:
@@ -299,12 +352,16 @@ class Game:
                 self._handle_playing_level(result, dt, now)
             elif self.state == config.STATE_PLAYING_DUO:
                 self._handle_playing_duo(result, dt, now)
+            elif self.state == config.STATE_PLAYING_LAN_DUO:
+                self._handle_playing_lan_duo(result, now)
             elif self.state == config.STATE_LEVEL_CLEAR:
                 self._handle_level_clear(now)
             elif self.state == config.STATE_PAUSED:
                 self._handle_paused(result, cursor_pos, mouse_pos, mouse_clicked, now)
             elif self.state in {config.STATE_GAMEOVER, config.STATE_DUO_GAMEOVER}:
                 self._handle_gameover(result, cursor_pos, mouse_pos, mouse_clicked, now)
+            elif self.state == config.STATE_LAN_DUO_GAMEOVER:
+                self._handle_lan_duo_gameover(result, cursor_pos, mouse_pos, mouse_clicked)
             elif self.state == config.STATE_COMING_SOON:
                 self._handle_coming_soon(result, cursor_pos, mouse_pos, mouse_clicked)
             elif self.state == config.STATE_OPTIONS:
@@ -312,6 +369,8 @@ class Game:
 
             self.draw(result, cursor_pos, mouse_pos, now)
 
+        self._set_lan_text_input(False)
+        self.lan_duo_mode.cleanup()
         self.vision.release()
         pygame.quit()
         sys.exit()
@@ -428,9 +487,10 @@ class Game:
                 if action == "shared":
                     self.state = config.STATE_DUO_LEVEL_SELECT
                     self.active_mode_name = "duo"
-                elif action == "separate":
-                    self.state = config.STATE_COMING_SOON
-                    self.active_mode_name = "duo"
+                elif action == "lan":
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_LAN_DUO_MENU
+                    self.active_mode_name = "lan_duo"
                 return
         for action, button in self.duo_control_nav_buttons:
             if self._button_clicked(button, result, cursor_pos, mouse_pos, mouse_clicked):
@@ -457,6 +517,154 @@ class Game:
                     self.state = config.STATE_DUO_CONTROL_SELECT
                     self.active_mode_name = "duo"
                 return
+
+    def _handle_lan_key_event(self, event: pygame.event.Event) -> bool:
+        if self.state != config.STATE_LAN_DUO_JOIN:
+            return False
+        return self.lan_duo_mode.handle_key_event(event)
+
+    def _handle_lan_text_input_event(self, event: pygame.event.Event) -> None:
+        if self.state != config.STATE_LAN_DUO_JOIN:
+            return
+        self.lan_duo_mode.handle_text_input(getattr(event, "text", ""))
+
+    def _set_lan_text_input(self, active: bool) -> None:
+        if self.lan_text_input_active == active:
+            return
+        self.lan_text_input_active = active
+        try:
+            if active:
+                pygame.key.start_text_input()
+            else:
+                pygame.key.stop_text_input()
+        except pygame.error:
+            return
+
+    def _handle_lan_duo_menu(
+        self,
+        result: VisionResult,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+        now: float,
+    ) -> None:
+        self.lan_duo_mode.update(result, now)
+        for action, button in self.lan_menu_buttons:
+            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+                if action == "host":
+                    self.lan_duo_mode.start_host()
+                    self.state = config.STATE_LAN_DUO_HOST
+                    self.active_mode_name = "lan_duo"
+                elif action == "join":
+                    self.lan_duo_mode.start_join_entry()
+                    self._set_lan_text_input(True)
+                    self.state = config.STATE_LAN_DUO_JOIN
+                    self.active_mode_name = "lan_duo"
+                elif action == "back":
+                    self._set_lan_text_input(False)
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_DUO_CONTROL_SELECT
+                    self.active_mode_name = "duo"
+                return
+
+    def _handle_lan_duo_host(
+        self,
+        result: VisionResult,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+        now: float,
+    ) -> None:
+        self.lan_duo_mode.update(result, now)
+        self._sync_lan_play_state()
+        if self.state != config.STATE_LAN_DUO_HOST:
+            return
+        for action, button in self.lan_host_buttons:
+            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+                if action == "start":
+                    if self.lan_duo_mode.can_start_match():
+                        self.lan_duo_mode.start_match()
+                elif action == "back":
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_LAN_DUO_MENU
+                    self.active_mode_name = "lan_duo"
+                return
+
+    def _handle_lan_duo_join(
+        self,
+        result: VisionResult,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+        now: float,
+        connect_requested: bool = False,
+    ) -> None:
+        self.lan_duo_mode.update(result, now)
+        if connect_requested:
+            self.lan_duo_mode.connect_to_host()
+        for action, button in self.lan_join_buttons:
+            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+                if action == "connect":
+                    self.lan_duo_mode.connect_to_host()
+                elif action == "back":
+                    self._set_lan_text_input(False)
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_LAN_DUO_MENU
+                    self.active_mode_name = "lan_duo"
+                return
+        if self.lan_duo_mode.client and self.lan_duo_mode.client.connected:
+            self._set_lan_text_input(False)
+            self.state = config.STATE_LAN_DUO_WAITING
+            self.active_mode_name = "lan_duo"
+        self._sync_lan_play_state()
+
+    def _handle_lan_duo_waiting(
+        self,
+        result: VisionResult,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+        now: float,
+    ) -> None:
+        self.lan_duo_mode.update(result, now)
+        for action, button in self.lan_waiting_buttons:
+            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+                if action == "back":
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_LAN_DUO_MENU
+                    self.active_mode_name = "lan_duo"
+                return
+        self._sync_lan_play_state()
+
+    def _handle_playing_lan_duo(self, result: VisionResult, now: float) -> None:
+        self.lan_duo_mode.update(result, now)
+        self._sync_lan_play_state()
+
+    def _handle_lan_duo_gameover(
+        self,
+        result: VisionResult,
+        cursor_pos: Optional[tuple[int, int]],
+        mouse_pos: tuple[int, int],
+        mouse_clicked: bool,
+    ) -> None:
+        for action, button in self.gameover_lan_buttons:
+            if button.clicked(cursor_pos, result.pinch_clicked, mouse_pos, mouse_clicked):
+                if action == "lan_menu":
+                    self.lan_duo_mode.cleanup()
+                    self.state = config.STATE_LAN_DUO_MENU
+                    self.active_mode_name = "lan_duo"
+                return
+
+    def _sync_lan_play_state(self) -> None:
+        if self.lan_duo_mode.connection_lost:
+            self.state = config.STATE_LAN_DUO_GAMEOVER
+            self.active_mode_name = "lan_duo"
+        elif self.lan_duo_mode.latest_match_phase == "playing":
+            self.state = config.STATE_PLAYING_LAN_DUO
+            self.active_mode_name = "lan_duo"
+        elif self.lan_duo_mode.latest_match_phase == "gameover":
+            self.state = config.STATE_LAN_DUO_GAMEOVER
+            self.active_mode_name = "lan_duo"
 
     def _handle_options(
         self,
@@ -654,9 +862,12 @@ class Game:
             config.STATE_PLAYING_LEVEL,
             config.STATE_DUO_WAITING,
             config.STATE_PLAYING_DUO,
+            config.STATE_LAN_DUO_WAITING,
+            config.STATE_PLAYING_LAN_DUO,
             config.STATE_PAUSED,
             config.STATE_GAMEOVER,
             config.STATE_DUO_GAMEOVER,
+            config.STATE_LAN_DUO_GAMEOVER,
             config.STATE_LEVEL_CLEAR,
         }:
             self.ui.draw_world(draw_mode, draw_mode_name, now)
@@ -669,6 +880,16 @@ class Game:
         elif self.state in {config.STATE_DUO_CONTROL_SELECT, config.STATE_DUO_LEVEL_SELECT}:
             sidebar_mode = None
             sidebar_mode_name = "duo"
+        elif self.state in {
+            config.STATE_LAN_DUO_MENU,
+            config.STATE_LAN_DUO_HOST,
+            config.STATE_LAN_DUO_JOIN,
+            config.STATE_LAN_DUO_WAITING,
+            config.STATE_PLAYING_LAN_DUO,
+            config.STATE_LAN_DUO_GAMEOVER,
+        }:
+            sidebar_mode = self.lan_duo_mode
+            sidebar_mode_name = "lan_duo"
         self.ui.draw_sidebar(
             result,
             sidebar_mode,
@@ -701,6 +922,14 @@ class Game:
                 cursor_pos,
                 mouse_pos,
             )
+        elif self.state == config.STATE_LAN_DUO_MENU:
+            self.ui.draw_lan_duo_menu(self.lan_menu_buttons, cursor_pos, mouse_pos)
+        elif self.state == config.STATE_LAN_DUO_HOST:
+            self.ui.draw_lan_duo_host(self.lan_duo_mode, self.lan_host_buttons, cursor_pos, mouse_pos)
+        elif self.state == config.STATE_LAN_DUO_JOIN:
+            self.ui.draw_lan_duo_join(self.lan_duo_mode, self.lan_join_buttons, cursor_pos, mouse_pos)
+        elif self.state == config.STATE_LAN_DUO_WAITING:
+            self.ui.draw_lan_duo_waiting(self.lan_duo_mode, self.lan_waiting_buttons, cursor_pos, mouse_pos)
         elif self.state == config.STATE_PAUSED:
             self.ui.draw_pause()
             for _, button in self.pause_buttons_for_active_state():
@@ -712,6 +941,13 @@ class Game:
                 mouse_pos,
                 self.active_mode_name,
                 self.active_mode,
+            )
+        elif self.state == config.STATE_LAN_DUO_GAMEOVER:
+            self.ui.draw_lan_duo_gameover(
+                self.lan_duo_mode,
+                self.gameover_lan_buttons,
+                cursor_pos,
+                mouse_pos,
             )
         elif self.state == config.STATE_COMING_SOON:
             self.ui.draw_coming_soon(self.coming_soon_buttons, cursor_pos, mouse_pos)
@@ -728,6 +964,8 @@ class Game:
             self.ui.draw_small_notice("Waiting for both players...")
         elif self.state == config.STATE_PLAYING_DUO and self.duo_mode.status == "paused":
             self.ui.draw_overlay_panel("Duo Paused", [self.duo_mode.pause_reason], config.COLOR_WARNING)
+        elif self.state == config.STATE_PLAYING_LAN_DUO and self.lan_duo_mode.status == "paused":
+            self.ui.draw_overlay_panel("LAN Paused", [self.lan_duo_mode.pause_reason], config.COLOR_WARNING)
         elif self.state == config.STATE_PLAYING_SINGLE and now < self.single_mode.invincible_until:
             self.ui.draw_small_notice("Spawn protection...")
         elif (
@@ -751,6 +989,12 @@ class Game:
             return "single_challenge"
         if self.state in {config.STATE_DUO_WAITING, config.STATE_PLAYING_DUO, config.STATE_DUO_GAMEOVER}:
             return "duo"
+        if self.state in {
+            config.STATE_LAN_DUO_WAITING,
+            config.STATE_PLAYING_LAN_DUO,
+            config.STATE_LAN_DUO_GAMEOVER,
+        }:
+            return "lan_duo"
         if self.state in {config.STATE_PLAYING_LEVEL, config.STATE_LEVEL_CLEAR}:
             return "level"
         if self.state in {config.STATE_PAUSED, config.STATE_GAMEOVER}:

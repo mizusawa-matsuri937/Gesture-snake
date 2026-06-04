@@ -8,6 +8,7 @@ import pygame
 
 import config
 from entities import BigFood, Food, Snake
+from summary import PerformanceTracker
 from utils import index_to_game_target
 from vision import VisionResult
 
@@ -25,6 +26,7 @@ class SingleMode:
         self.snake = Snake()
         self.score = 0
         self.apples_eaten = 0
+        self.summary = PerformanceTracker()
         self.invincible_until = 0.0
         self.normal_food: Food = self._spawn_food(
             radius=14,
@@ -39,6 +41,7 @@ class SingleMode:
         self.snake.reset()
         self.score = 0
         self.apples_eaten = 0
+        self.summary.reset()
         self.invincible_until = now + config.INVINCIBLE_SECONDS
         self.normal_food = self._spawn_food(
             radius=14,
@@ -62,6 +65,7 @@ class SingleMode:
         now: float,
         sensitivity: float,
     ) -> Optional[str]:
+        self.summary.record_frame(dt, result.detected, self.current_speed)
         if result.detected and result.index_tip_norm is not None:
             self.snake.target_pos = index_to_game_target(result.index_tip_norm, sensitivity)
 
@@ -82,25 +86,30 @@ class SingleMode:
                 avoid=[self.big_food] if self.big_food else [],
             )
             if self.apples_eaten % config.BIG_FOOD_EVERY == 0 and self.big_food is None:
-                self.big_food = self._spawn_food(
-                    radius=25,
-                    score=config.BIG_FOOD_SCORE,
-                    growth=config.BIG_GROWTH,
-                    color=config.COLOR_BIG_FOOD,
-                    now=now,
-                    duration=config.BIG_FOOD_DURATION,
-                    avoid=[self.normal_food],
-                    big=True,
-                )
+                self.spawn_big_food(now)
 
         if self.big_food and self.big_food.overlaps(self.snake.head_pos, config.SNAKE_RADIUS):
             self.score += self.big_food.score
             self.snake.grow(self.big_food.growth)
+            self.summary.record_big_apple()
             self.big_food = None
 
         if now > self.invincible_until and self.snake.hits_self():
             return "gameover"
         return None
+
+    def spawn_big_food(self, now: float) -> Food:
+        self.big_food = self._spawn_food(
+            radius=25,
+            score=config.BIG_FOOD_SCORE,
+            growth=config.BIG_GROWTH,
+            color=config.COLOR_BIG_FOOD,
+            now=now,
+            duration=config.BIG_FOOD_DURATION,
+            avoid=[self.normal_food],
+            big=True,
+        )
+        return self.big_food
 
     def _spawn_food(
         self,

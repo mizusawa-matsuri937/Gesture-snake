@@ -13,7 +13,9 @@ Gesture Snake is a Python, pygame, OpenCV, and MediaPipe game where the snake fo
 - Endless challenges reuse the five level maps but do not use target scores, target bars, or Level Clear.
 - Classic endless play and Endless Challenges wrap at map edges as soon as the snake head reaches the boundary.
 - `Duo Mode` supports a shared-camera battle where the left half controls the green snake and the right half controls the blue snake.
+- `Duo Mode` also includes `LAN Battle`, a first local-network TCP battle mode for two computers.
 - `Level Mode` keeps target scores, a horizontal target progress bar, Level Clear, moving walls, portals, and timed big apples.
+- Game Over screens show a post-game performance dashboard with score/result, apples, big apples, active time, max speed, and gesture tracking stability.
 
 ## Run
 
@@ -48,6 +50,8 @@ Press `ESC` to quit.
 | `Options` | Change gesture sensitivity |
 | Shared camera left half | Control the green snake in Duo Mode |
 | Shared camera right half | Control the blue snake in Duo Mode |
+| LAN Battle Host Game | Start a local TCP server as Player 1 |
+| LAN Battle Join Game | Connect to the host IP as Player 2 |
 | `F11` | Toggle fullscreen/windowed |
 | `ESC` | Quit |
 
@@ -79,7 +83,7 @@ There is no target score, no target progress bar, and no Level Clear in endless 
 `Duo Mode` starts with a control setup screen:
 
 - `Shared Camera`: playable in this version.
-- `Separate Cameras`: visible as Coming Soon.
+- `LAN Battle`: playable first-version local network battle.
 
 Shared camera battles use the same five endless maps. The camera preview is split into left and right halves:
 
@@ -99,6 +103,40 @@ Duo battle rules:
 - A snake death subtracts 100 points and immediately ends the match.
 - Head-on collision subtracts 100 points from both players.
 - Highest score wins; tied scores show Draw.
+
+### LAN Battle
+
+`LAN Battle` is available from `Duo Mode` -> `LAN Battle`. It is a first-version TCP mode for two computers on the same local network. The host computer runs the authoritative game server and also connects as Player 1. The joining computer connects to the host IP as Player 2.
+
+How to play:
+
+1. On computer A, open `Duo Mode` -> `LAN Battle` -> `Host Game`.
+2. Share the displayed IP and port with computer B.
+3. On computer B, open `Duo Mode` -> `LAN Battle` -> `Join Game`.
+4. Type the host IP, press `Enter` or click `Connect`, then wait for the host.
+5. On computer A, click `Start Match` after Player 2 connects.
+
+LAN Battle uses the Classic map in this version. Each computer uses its own camera and MediaPipe hand tracking locally. The network only sends a small gesture input summary: detected hand state, normalized index-finger target, click gesture, restart gesture, timestamp, and sequence number. Camera video and full MediaPipe landmarks are not sent.
+
+Default port: `50007`.
+
+If Join fails, check that both computers are on the same LAN, the IP is correct, the port is not blocked, and Windows Firewall allows Python. You can also use `ipconfig` on the host to confirm the local IPv4 address.
+
+Current LAN Battle limits:
+
+- Local network TCP only.
+- No public internet matchmaking or NAT traversal.
+- Classic map only.
+- No rematch button in the first version.
+- A real two-computer test is still recommended after automated localhost tests pass.
+
+### Post-game Dashboard
+
+Every Game Over screen includes a performance summary for the just-finished run:
+
+- Single, Endless Challenge, and Level Mode show score, apples, big apples, active time, max speed, and hand tracking stability.
+- Shared-camera Duo and LAN Battle show the result, shared apple totals, active time, max speed, and overall two-player tracking stability.
+- Tracking stability is measured only during active play: single-player modes count frames with a detected hand, while two-player modes count frames where both players are ready.
 
 ### Level Mode
 
@@ -120,12 +158,19 @@ vision.py                 # Camera and MediaPipe gesture input
 entities.py               # Snake, Food, Wall, MovingWall, PortalPair
 ui.py                     # Drawing and buttons
 game.py                   # Main loop and state machine
+summary.py                # Post-game performance tracking
 modes/
   single_mode.py          # Classic endless mode logic
   endless_challenge_mode.py
   duo_mode.py               # Shared-camera two-player battle mode
+  lan_duo_mode.py         # LAN TCP two-computer battle flow
   obstacle_helpers.py     # Shared wall, portal, and safe food helpers
   level_mode.py           # Target-based level mode
+network/
+  protocol.py             # JSON Lines message framing
+  net_state.py            # Network input and state serialization helpers
+  server.py               # Authoritative LAN GameServer
+  client.py               # LAN GameClient
 tools/capture_ui_states.py
 test_snake.py
 ```
@@ -135,7 +180,7 @@ test_snake.py
 Compile check:
 
 ```bash
-.\.venv\Scripts\python.exe -m py_compile snake.py game.py vision.py ui.py entities.py utils.py config.py modes/single_mode.py modes/endless_challenge_mode.py modes/obstacle_helpers.py modes/level_mode.py tools/capture_ui_states.py
+.\.venv\Scripts\python.exe -m py_compile snake.py game.py vision.py ui.py entities.py utils.py config.py summary.py modes/single_mode.py modes/endless_challenge_mode.py modes/duo_mode.py modes/lan_duo_mode.py modes/obstacle_helpers.py modes/level_mode.py network/protocol.py network/server.py network/client.py network/net_state.py tools/capture_ui_states.py
 ```
 
 Unit tests:

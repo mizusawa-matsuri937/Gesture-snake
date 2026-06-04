@@ -45,8 +45,22 @@ REQUIRED_STATES = [
     "duo_playing",
     "duo_paused",
     "duo_gameover",
-    "duo_separate_coming_soon",
+    "lan_duo_menu",
+    "lan_duo_host",
+    "lan_duo_join",
+    "lan_duo_waiting",
+    "lan_duo_playing",
+    "lan_duo_gameover",
 ]
+
+
+class _FakeLanClient:
+    player_id = 2
+    connected = True
+    error_message = ""
+
+    def disconnect(self) -> None:
+        self.connected = False
 
 
 def capture_ui_states(output_dir: Path) -> dict[str, Path]:
@@ -87,7 +101,12 @@ def capture_ui_states(output_dir: Path) -> dict[str, Path]:
         "duo_playing": lambda: _set_duo_playing(game, now),
         "duo_paused": lambda: _set_duo_paused(game, now),
         "duo_gameover": lambda: _set_duo_gameover(game, now),
-        "duo_separate_coming_soon": lambda: _set_state(game, config.STATE_COMING_SOON, "duo"),
+        "lan_duo_menu": lambda: _set_lan_menu(game),
+        "lan_duo_host": lambda: _set_lan_host(game),
+        "lan_duo_join": lambda: _set_lan_join(game),
+        "lan_duo_waiting": lambda: _set_lan_waiting(game),
+        "lan_duo_playing": lambda: _set_lan_playing(game, now),
+        "lan_duo_gameover": lambda: _set_lan_gameover(game, now),
     }
 
     for state in REQUIRED_STATES:
@@ -119,6 +138,10 @@ def _set_paused(game: Game, paused_state: str, mode_name: str) -> None:
 def _set_gameover_single(game: Game) -> None:
     game.single_mode.score = 120
     game.single_mode.apples_eaten = 12
+    game.single_mode.summary.reset()
+    game.single_mode.summary.record_frame(dt=84.0, tracking_ok=True, speed=260)
+    game.single_mode.summary.record_big_apple()
+    game.single_mode.summary.record_big_apple()
     game.state = config.STATE_GAMEOVER
     game.active_mode_name = "single"
 
@@ -159,6 +182,10 @@ def _set_gameover_level(game: Game) -> None:
     _set_level_stage(game, 2, 60, 180, 8.0)
     game.level_mode.level_score = 60
     game.level_mode.total_score = 180
+    game.level_mode.apples_eaten = 10
+    game.level_mode.summary.record_frame(dt=96.0, tracking_ok=True, speed=220)
+    game.level_mode.summary.record_frame(dt=14.0, tracking_ok=False, speed=240)
+    game.level_mode.summary.record_big_apple()
     game.state = config.STATE_GAMEOVER
     game.active_mode_name = "level"
 
@@ -167,6 +194,10 @@ def _set_gameover_single_challenge(game: Game) -> None:
     _set_single_challenge_stage(game, 4, 8.0)
     game.single_challenge_mode.score = 210
     game.single_challenge_mode.apples_eaten = 15
+    game.single_challenge_mode.summary.record_frame(dt=125.0, tracking_ok=True, speed=300)
+    game.single_challenge_mode.summary.record_big_apple()
+    game.single_challenge_mode.summary.record_big_apple()
+    game.single_challenge_mode.summary.record_big_apple()
     game.state = config.STATE_GAMEOVER
     game.active_mode_name = "single_challenge"
 
@@ -229,9 +260,103 @@ def _set_duo_gameover(game: Game, now: float) -> None:
     _set_duo_playing(game, now)
     game.duo_mode.green.score = 120
     game.duo_mode.blue.score = 90
+    game.duo_mode.apples_eaten = 11
+    game.duo_mode.summary.record_frame(dt=136.0, tracking_ok=True, speed=268)
+    game.duo_mode.summary.record_frame(dt=10.0, tracking_ok=False, speed=276)
+    game.duo_mode.summary.record_big_apple()
+    game.duo_mode.summary.record_big_apple()
     game.duo_mode.finish(())
     game.state = config.STATE_DUO_GAMEOVER
     game.active_mode_name = "duo"
+
+
+def _lan_state_payload(phase: str = "playing") -> dict:
+    return {
+        "type": "state",
+        "tick": 120,
+        "phase": phase,
+        "time_left": 136.0,
+        "map_id": 0,
+        "snakes": {
+            "1": {
+                "alive": True,
+                "score": 80,
+                "head": [620, 360],
+                "body": [[620, 360], [604, 360], [588, 360], [572, 360]],
+                "color": "green",
+            },
+            "2": {
+                "alive": True,
+                "score": 60,
+                "head": [1040, 420],
+                "body": [[1040, 420], [1056, 420], [1072, 420], [1088, 420]],
+                "color": "blue",
+            },
+        },
+        "foods": [{"kind": "normal", "pos": [850, 380], "score": 10, "growth": 1, "radius": 14}],
+        "big_food": None,
+        "winner": None if phase != "gameover" else "1",
+        "message": "" if phase != "gameover" else "Winner: Player 1",
+        "summary": {
+            "time": "2:16",
+            "apples": 9,
+            "big_apples": 1,
+            "max_speed": 252,
+            "tracking": "93%",
+        },
+    }
+
+
+def _set_lan_menu(game: Game) -> None:
+    game.lan_duo_mode.cleanup()
+    game.state = config.STATE_LAN_DUO_MENU
+    game.active_mode_name = "lan_duo"
+
+
+def _set_lan_host(game: Game) -> None:
+    game.lan_duo_mode.cleanup()
+    game.lan_duo_mode.is_host = True
+    game.lan_duo_mode.host_ip = "192.168.1.20"
+    game.lan_duo_mode.info_message = ""
+    game.state = config.STATE_LAN_DUO_HOST
+    game.active_mode_name = "lan_duo"
+
+
+def _set_lan_join(game: Game) -> None:
+    game.lan_duo_mode.cleanup()
+    game.lan_duo_mode.join_ip = "192.168.1.20"
+    game.lan_duo_mode.info_message = "Enter the host IP and press Enter"
+    game.state = config.STATE_LAN_DUO_JOIN
+    game.active_mode_name = "lan_duo"
+
+
+def _set_lan_waiting(game: Game) -> None:
+    game.lan_duo_mode.cleanup()
+    game.lan_duo_mode.info_message = "Connected as Player 2"
+    game.lan_duo_mode.client = _FakeLanClient()
+    game.lan_duo_mode.was_connected = True
+    game.state = config.STATE_LAN_DUO_WAITING
+    game.active_mode_name = "lan_duo"
+
+
+def _set_lan_playing(game: Game, now: float) -> None:
+    game.lan_duo_mode.cleanup()
+    game.lan_duo_mode.render_state.update_from_state(_lan_state_payload("playing"), now)
+    game.lan_duo_mode.client = _FakeLanClient()
+    game.lan_duo_mode.was_connected = True
+    game.lan_duo_mode.latest_match_phase = "playing"
+    game.state = config.STATE_PLAYING_LAN_DUO
+    game.active_mode_name = "lan_duo"
+
+
+def _set_lan_gameover(game: Game, now: float) -> None:
+    game.lan_duo_mode.cleanup()
+    game.lan_duo_mode.render_state.update_from_state(_lan_state_payload("gameover"), now)
+    game.lan_duo_mode.client = _FakeLanClient()
+    game.lan_duo_mode.was_connected = True
+    game.lan_duo_mode.latest_match_phase = "gameover"
+    game.state = config.STATE_LAN_DUO_GAMEOVER
+    game.active_mode_name = "lan_duo"
 
 
 def main() -> None:

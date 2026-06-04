@@ -9,10 +9,14 @@ Gesture Snake is a Python pygame game controlled by MediaPipe hand gestures. The
 - `ui.py`: all visible UI drawing and buttons.
 - `vision.py`: camera capture, MediaPipe hand tracking, gesture triggers.
 - `entities.py`: snake, food, walls, moving walls, portals.
+- `summary.py`: post-game performance tracking.
 - `modes/single_mode.py`: classic endless logic.
 - `modes/endless_challenge_mode.py`: selectable endless challenge maps.
+- `modes/duo_mode.py`: shared-camera two-player battle mode.
+- `modes/lan_duo_mode.py`: local-network TCP two-computer battle flow.
 - `modes/level_mode.py`: target-based level mode.
 - `modes/obstacle_helpers.py`: shared wall, portal, layout, and safe food helpers.
+- `network/`: JSON Lines protocol, LAN GameServer/GameClient, and network state serialization.
 
 ## User Preferences
 
@@ -54,7 +58,7 @@ Gesture Snake is a Python pygame game controlled by MediaPipe hand gestures. The
 Run these before committing project changes:
 
 ```bash
-.\.venv\Scripts\python.exe -m py_compile snake.py game.py vision.py ui.py entities.py utils.py config.py modes/single_mode.py modes/endless_challenge_mode.py modes/obstacle_helpers.py modes/level_mode.py tools/capture_ui_states.py
+.\.venv\Scripts\python.exe -m py_compile snake.py game.py vision.py ui.py entities.py utils.py config.py summary.py modes/single_mode.py modes/endless_challenge_mode.py modes/duo_mode.py modes/lan_duo_mode.py modes/obstacle_helpers.py modes/level_mode.py network/protocol.py network/server.py network/client.py network/net_state.py tools/capture_ui_states.py
 .\.venv\Scripts\python.exe -m unittest discover
 ```
 

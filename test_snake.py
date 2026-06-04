@@ -2,6 +2,7 @@ import os
 import random
 import re
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -57,6 +58,180 @@ def duo_result(left: Optional[tuple[float, float]] = (0.25, 0.5), right: Optiona
     )
 
 
+def wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
+class NetworkProtocolTests(unittest.TestCase):
+    def test_encode_decode_round_trips_single_json_line_message(self):
+        from network.protocol import decode_messages, encode_message
+
+        payload = {"type": "hello", "player_name": "Player 2", "version": 1}
+
+        messages, remainder = decode_messages(encode_message(payload))
+
+        self.assertEqual(messages, [payload])
+        self.assertEqual(remainder, b"")
+
+    def test_decode_handles_multiple_messages_in_one_tcp_chunk(self):
+        from network.protocol import decode_messages, encode_message
+
+        first = {"type": "ping", "timestamp": 12.5}
+        second = {"type": "pong", "timestamp": 12.5}
+
+        messages, remainder = decode_messages(encode_message(first) + encode_message(second))
+
+        self.assertEqual(messages, [first, second])
+        self.assertEqual(remainder, b"")
+
+    def test_decode_preserves_partial_message_for_next_recv(self):
+        from network.protocol import decode_messages, encode_message
+
+        payload = {"type": "input", "player_id": 1, "target_x": 0.4}
+        encoded = encode_message(payload)
+
+        messages, remainder = decode_messages(encoded[:8])
+        later_messages, later_remainder = decode_messages(remainder + encoded[8:])
+
+        self.assertEqual(messages, [])
+        self.assertEqual(later_messages, [payload])
+        self.assertEqual(later_remainder, b"")
+
+    def test_decode_ignores_invalid_json_lines_without_crashing(self):
+        from network.protocol import decode_messages, encode_message
+
+        payload = {"type": "state", "tick": 1}
+
+        messages, remainder = decode_messages(b"{bad json}\n[]\n" + encode_message(payload))
+
+        self.assertEqual(messages, [payload])
+        self.assertEqual(remainder, b"")
+
+
+class NetworkServerClientTests(unittest.TestCase):
+    def test_server_initial_status_is_waiting_and_not_running(self):
+        from network.server import GameServer
+
+        server = GameServer(host="127.0.0.1", port=0)
+
+        status = server.get_status()
+
+        self.assertFalse(status["running"])
+        self.assertEqual(status["phase"], "waiting")
+        self.assertEqual(status["player_count"], 0)
+        self.assertEqual(status["port"], 0)
+
+    def test_server_assigns_two_player_ids_and_rejects_third_client(self):
+        from network.client import GameClient
+        from network.server import GameServer
+
+        server = GameServer(host="127.0.0.1", port=0, tick_rate=20, state_rate=10)
+        clients: list[GameClient] = []
+        try:
+            server.start()
+            self.assertGreater(server.port, 0)
+
+            first = GameClient("127.0.0.1", server.port, "Player 1", timeout=1.0)
+            second = GameClient("127.0.0.1", server.port, "Player 2", timeout=1.0)
+            clients.extend([first, second])
+
+            self.assertTrue(first.connect())
+            self.assertTrue(second.connect())
+            self.assertTrue(wait_until(lambda: server.get_status()["player_count"] == 2))
+            self.assertEqual(first.player_id, 1)
+            self.assertEqual(second.player_id, 2)
+
+            third = GameClient("127.0.0.1", server.port, "Player 3", timeout=1.0)
+            clients.append(third)
+
+            self.assertFalse(third.connect())
+            self.assertIn("Room is full", third.error_message)
+        finally:
+            for client in clients:
+                client.disconnect()
+            server.stop()
+
+    def test_server_keeps_only_latest_input_sequence_per_player(self):
+        from network.server import GameServer
+
+        server = GameServer(host="127.0.0.1", port=0)
+
+        server.record_input(
+            {
+                "type": "input",
+                "player_id": 1,
+                "detected": True,
+                "target_x": 0.2,
+                "target_y": 0.3,
+                "timestamp": 1.0,
+                "seq": 5,
+            }
+        )
+        server.record_input(
+            {
+                "type": "input",
+                "player_id": 1,
+                "detected": True,
+                "target_x": 0.9,
+                "target_y": 0.8,
+                "timestamp": 2.0,
+                "seq": 4,
+            }
+        )
+
+        latest = server.get_latest_inputs()[1]
+
+        self.assertEqual(latest.seq, 5)
+        self.assertEqual(latest.target_x, 0.2)
+        self.assertEqual(latest.target_y, 0.3)
+
+    def test_state_snapshot_contains_snakes_food_scores_and_winner(self):
+        from network.server import GameServer
+
+        server = GameServer(host="127.0.0.1", port=0)
+
+        state = server.build_state()
+
+        self.assertEqual(state["type"], "state")
+        self.assertIn("1", state["snakes"])
+        self.assertIn("2", state["snakes"])
+        self.assertIn("score", state["snakes"]["1"])
+        self.assertIn("body", state["snakes"]["1"])
+        self.assertIn("foods", state)
+        self.assertIn("winner", state)
+        self.assertEqual(
+            state["summary"],
+            {
+                "time": "0:00",
+                "apples": 0,
+                "big_apples": 0,
+                "max_speed": 0,
+                "tracking": "0%",
+            },
+        )
+
+    def test_lan_render_state_keeps_summary_from_latest_state(self):
+        from modes.lan_duo_mode import LanRenderState
+
+        render_state = LanRenderState()
+        summary = {
+            "time": "1:24",
+            "apples": 8,
+            "big_apples": 1,
+            "max_speed": 244,
+            "tracking": "92%",
+        }
+
+        render_state.update_from_state({"summary": summary}, now=10.0)
+
+        self.assertEqual(render_state.summary, summary)
+
+
 class FontLoadingTests(unittest.TestCase):
     def test_load_font_falls_back_when_system_font_lookup_fails(self):
         pygame.init()
@@ -85,6 +260,30 @@ class FontLoadingTests(unittest.TestCase):
 
 
 class GameRuleTests(unittest.TestCase):
+    def test_performance_tracker_formats_time_stability_and_max_speed(self):
+        from summary import PerformanceTracker
+
+        tracker = PerformanceTracker()
+
+        self.assertEqual(tracker.elapsed_label(), "0:00")
+        self.assertEqual(tracker.stability_label(), "0%")
+
+        tracker.record_frame(dt=1.0, tracking_ok=True, speed=180)
+        tracker.record_frame(dt=2.4, tracking_ok=False, speed=220)
+        tracker.record_big_apple()
+
+        self.assertEqual(tracker.elapsed_label(), "0:03")
+        self.assertEqual(tracker.stability_label(), "29%")
+        self.assertEqual(tracker.max_speed, 220)
+        self.assertEqual(tracker.big_apples_eaten, 1)
+
+        tracker.reset()
+
+        self.assertEqual(tracker.elapsed_label(), "0:00")
+        self.assertEqual(tracker.stability_label(), "0%")
+        self.assertEqual(tracker.big_apples_eaten, 0)
+        self.assertEqual(tracker.max_speed, 0)
+
     def test_display_defaults_to_fullscreen_with_windowed_fallback(self):
         self.assertTrue(config.FULLSCREEN_DEFAULT)
         self.assertEqual(config.WINDOWED_SIZE, (1400, 800))
@@ -352,7 +551,7 @@ class GameFlowTests(unittest.TestCase):
             game._handle_menu(VisionResult(), None, duo_button.rect.center, True, now=1.0)
 
             self.assertEqual(game.state, config.STATE_DUO_CONTROL_SELECT)
-            self.assertEqual([action for action, _ in game.duo_control_buttons], ["shared", "separate"])
+            self.assertEqual([action for action, _ in game.duo_control_buttons], ["shared", "lan"])
         finally:
             game.vision.release()
             pygame.quit()
@@ -391,24 +590,123 @@ class GameFlowTests(unittest.TestCase):
             game.vision.release()
             pygame.quit()
 
-    def test_separate_camera_duo_entry_opens_coming_soon(self):
+    def test_lan_battle_duo_entry_opens_lan_menu(self):
         from game import Game
 
         game = Game(fullscreen=False, use_camera=False)
         try:
             game.state = config.STATE_DUO_CONTROL_SELECT
-            separate_button = dict(game.duo_control_buttons)["separate"]
+            lan_button = dict(game.duo_control_buttons)["lan"]
 
             game._handle_duo_control_select(
                 VisionResult(),
                 None,
-                separate_button.rect.center,
+                lan_button.rect.center,
                 True,
             )
 
-            self.assertEqual(game.state, config.STATE_COMING_SOON)
-            self.assertEqual(game.active_mode_name, "duo")
+            self.assertEqual(game.state, config.STATE_LAN_DUO_MENU)
+            self.assertEqual(game.active_mode_name, "lan_duo")
         finally:
+            game.lan_duo_mode.cleanup()
+            game.vision.release()
+            pygame.quit()
+
+    def test_lan_join_page_accepts_ip_keyboard_input(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_LAN_DUO_MENU
+            join_button = dict(game.lan_menu_buttons)["join"]
+
+            game._handle_lan_duo_menu(
+                VisionResult(),
+                None,
+                join_button.rect.center,
+                True,
+                now=1.0,
+            )
+            game._handle_lan_text_input_event(pygame.event.Event(pygame.TEXTINPUT, text="192.168.1.10"))
+            game._handle_lan_key_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_BACKSPACE, unicode=""))
+
+            self.assertEqual(game.state, config.STATE_LAN_DUO_JOIN)
+            self.assertEqual(game.lan_duo_mode.join_ip, "192.168.1.1")
+        finally:
+            game.lan_duo_mode.cleanup()
+            game.vision.release()
+            pygame.quit()
+
+    def test_lan_join_page_accepts_text_input_events(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_LAN_DUO_JOIN
+
+            game._handle_lan_text_input_event(pygame.event.Event(pygame.TEXTINPUT, text="127.0.0.1"))
+
+            self.assertEqual(game.lan_duo_mode.join_ip, "127.0.0.1")
+        finally:
+            game.lan_duo_mode.cleanup()
+            game.vision.release()
+            pygame.quit()
+
+    def test_lan_back_from_host_cleans_up_server_and_client(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_LAN_DUO_MENU
+            host_button = dict(game.lan_menu_buttons)["host"]
+
+            game._handle_lan_duo_menu(
+                VisionResult(),
+                None,
+                host_button.rect.center,
+                True,
+                now=1.0,
+            )
+            self.assertEqual(game.state, config.STATE_LAN_DUO_HOST)
+            self.assertIsNotNone(game.lan_duo_mode.server)
+
+            back_button = dict(game.lan_host_buttons)["back"]
+            game._handle_lan_duo_host(
+                VisionResult(),
+                None,
+                back_button.rect.center,
+                True,
+                now=1.2,
+            )
+
+            self.assertEqual(game.state, config.STATE_LAN_DUO_MENU)
+            self.assertIsNone(game.lan_duo_mode.server)
+            self.assertIsNone(game.lan_duo_mode.client)
+        finally:
+            game.lan_duo_mode.cleanup()
+            game.vision.release()
+            pygame.quit()
+
+    def test_lan_gameover_back_returns_to_lan_menu(self):
+        from game import Game
+
+        game = Game(fullscreen=False, use_camera=False)
+        try:
+            game.state = config.STATE_LAN_DUO_GAMEOVER
+            game.active_mode_name = "lan_duo"
+            back_button = dict(game.gameover_lan_buttons)["lan_menu"]
+
+            game._handle_lan_duo_gameover(
+                VisionResult(),
+                None,
+                back_button.rect.center,
+                True,
+            )
+
+            self.assertEqual(game.state, config.STATE_LAN_DUO_MENU)
+            self.assertEqual(game.active_mode_name, "lan_duo")
+        finally:
+            game.lan_duo_mode.cleanup()
             game.vision.release()
             pygame.quit()
 
@@ -456,6 +754,35 @@ class UILayoutTests(unittest.TestCase):
                 text = Path(path).read_text(encoding="utf-8")
                 self.assertIsNone(chinese.search(text))
 
+    def test_gameover_summary_items_include_core_dashboard_metrics(self):
+        from ui import GameUI
+
+        pygame.init()
+        try:
+            screen = pygame.Surface(config.WINDOWED_SIZE)
+            ui = GameUI(screen)
+            mode = SingleMode(rng=random.Random(30))
+            mode.score = 120
+            mode.apples_eaten = 9
+            mode.summary.record_frame(dt=84.0, tracking_ok=True, speed=252)
+            mode.summary.record_big_apple()
+
+            items = ui.summary_items_for("single", mode)
+
+            self.assertEqual(
+                items,
+                [
+                    ("Score", "120"),
+                    ("Apples", "9"),
+                    ("Big Apples", "1"),
+                    ("Time", "1:24"),
+                    ("Max Speed", "252 px/s"),
+                    ("Tracking", "100%"),
+                ],
+            )
+        finally:
+            pygame.quit()
+
     def test_screenshot_harness_renders_every_ui_state(self):
         from tools.capture_ui_states import REQUIRED_STATES, capture_ui_states
 
@@ -476,7 +803,12 @@ class UILayoutTests(unittest.TestCase):
         self.assertIn("duo_playing", REQUIRED_STATES)
         self.assertIn("duo_paused", REQUIRED_STATES)
         self.assertIn("duo_gameover", REQUIRED_STATES)
-        self.assertIn("duo_separate_coming_soon", REQUIRED_STATES)
+        self.assertIn("lan_duo_menu", REQUIRED_STATES)
+        self.assertIn("lan_duo_host", REQUIRED_STATES)
+        self.assertIn("lan_duo_join", REQUIRED_STATES)
+        self.assertIn("lan_duo_waiting", REQUIRED_STATES)
+        self.assertIn("lan_duo_playing", REQUIRED_STATES)
+        self.assertIn("lan_duo_gameover", REQUIRED_STATES)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
@@ -752,6 +1084,21 @@ class LevelModeTests(unittest.TestCase):
         self.assertEqual(mode.snake.head_pos.x, config.SIDEBAR_WIDTH + radius + 12)
         self.assertEqual(mode.snake.head_pos.y, config.WINDOW_HEIGHT - radius - 9)
 
+    def test_single_mode_summary_tracks_control_time_and_big_apples(self):
+        mode = SingleMode(rng=random.Random(27))
+
+        mode.update(VisionResult(detected=True, index_tip_norm=(0.5, 0.5)), dt=1.0, now=5.0, sensitivity=1.0)
+
+        self.assertEqual(mode.summary.elapsed_label(), "0:01")
+        self.assertEqual(mode.summary.stability_label(), "100%")
+        self.assertEqual(mode.summary.max_speed, config.BASE_SPEED)
+
+        mode.spawn_big_food(now=6.0)
+        mode.big_food.position = pygame.Vector2(mode.snake.head_pos)
+        mode.update(VisionResult(detected=False), dt=0.0, now=6.1, sensitivity=1.0)
+
+        self.assertEqual(mode.summary.big_apples_eaten, 1)
+
     def test_level_food_does_not_spawn_inside_wall(self):
         wall = Wall(pygame.Rect(config.SIDEBAR_WIDTH + 80, 80, 600, 500))
         mode = LevelMode(
@@ -816,6 +1163,7 @@ class LevelModeTests(unittest.TestCase):
         self.assertEqual(mode.level_score, config.BIG_FOOD_SCORE)
         self.assertEqual(mode.total_score, config.BIG_FOOD_SCORE)
         self.assertEqual(mode.snake.target_segments, starting_segments + config.BIG_GROWTH)
+        self.assertEqual(mode.summary.big_apples_eaten, 1)
 
     def test_level_portal_transports_head_and_uses_cooldown(self):
         mode = LevelMode(
@@ -951,6 +1299,20 @@ class EndlessChallengeModeTests(unittest.TestCase):
 
         self.assertIsNotNone(mode.big_food)
         self.assertEqual(mode.big_food.duration, config.BIG_FOOD_DURATION)
+        self.assertEqual(mode.summary.big_apples_eaten, 0)
+
+    def test_endless_challenge_summary_tracks_big_apple_eaten(self):
+        from modes.endless_challenge_mode import EndlessChallengeMode
+
+        mode = EndlessChallengeMode(level_index=0, rng=random.Random(28))
+        mode.spawn_big_food(now=5.0)
+        mode.big_food.position = pygame.Vector2(mode.snake.head_pos)
+
+        mode.update(VisionResult(detected=True, index_tip_norm=(0.5, 0.5)), dt=0.5, now=5.2, sensitivity=1.0)
+
+        self.assertEqual(mode.summary.big_apples_eaten, 1)
+        self.assertEqual(mode.summary.elapsed_label(), "0:00")
+        self.assertEqual(mode.summary.stability_label(), "100%")
 
     def test_endless_challenge_food_avoids_obstacles_and_portals(self):
         from modes.endless_challenge_mode import EndlessChallengeMode
@@ -1068,6 +1430,24 @@ class DuoModeTests(unittest.TestCase):
         self.assertEqual(mode.apples_eaten, config.BIG_FOOD_EVERY)
         self.assertIsNotNone(mode.big_food)
         self.assertEqual(mode.big_food.duration, config.BIG_FOOD_DURATION)
+        self.assertEqual(mode.summary.big_apples_eaten, 0)
+
+    def test_duo_summary_tracks_ready_time_and_big_apple_eaten(self):
+        from modes.duo_mode import DuoMode
+
+        mode = DuoMode(level_index=0, rng=random.Random(29))
+        mode.update(duo_result(), dt=0.0, now=1.0)
+        mode.update(duo_result(), dt=0.0, now=1.6)
+        mode.update(duo_result(), dt=1.0, now=2.6)
+        mode.spawn_big_food(now=2.0)
+        mode.big_food.position = pygame.Vector2(mode.green.snake.head_pos)
+
+        mode.update(duo_result(), dt=0.0, now=2.7)
+
+        self.assertEqual(mode.summary.elapsed_label(), "0:01")
+        self.assertEqual(mode.summary.stability_label(), "100%")
+        self.assertEqual(mode.summary.big_apples_eaten, 1)
+        self.assertEqual(mode.summary.max_speed, config.BASE_SPEED)
 
     def test_duo_wall_death_deducts_penalty_and_ends_match(self):
         from modes.duo_mode import DuoMode

@@ -180,7 +180,7 @@ class GameUI:
                     ),
                 )
             self.draw_snake(mode.snake)
-        elif mode_name == "duo":
+        elif mode_name in {"duo", "lan_duo"}:
             for wall in mode.moving_walls:
                 self.draw_moving_wall_track(wall)
             for wall in mode.walls:
@@ -317,6 +317,9 @@ class GameUI:
         if mode_name == "duo":
             status = "Both ready" if duo_ready else (getattr(result, "pause_reason", "") or "Waiting for players")
             status_color = config.COLOR_SUCCESS if duo_ready else config.COLOR_WARNING
+        elif mode_name == "lan_duo":
+            status = "Hand locked" if detected else "Waiting for hand"
+            status_color = config.COLOR_SUCCESS if detected else config.COLOR_WARNING
         else:
             status = "Hand locked" if detected else "Waiting for hand"
             status_color = config.COLOR_SUCCESS if detected else config.COLOR_WARNING
@@ -333,6 +336,9 @@ class GameUI:
         elif mode_name == "duo":
             self.draw_duo_stat_panel(mode, y, now, status)
             self.draw_duo_help_text()
+        elif mode_name == "lan_duo":
+            self.draw_lan_duo_stat_panel(mode, y, now)
+            self.draw_lan_duo_help_text()
         else:
             self.draw_single_stat_panel(mode, y, now, sensitivity_label)
             self.draw_single_help_text()
@@ -464,6 +470,26 @@ class GameUI:
             )
             self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(194 * config.LAYOUT_SCALE)))
 
+    def draw_lan_duo_stat_panel(self, mode, y: int, now: float) -> None:
+        minutes = int(getattr(mode, "remaining_seconds", config.DUO_MATCH_SECONDS)) // 60
+        seconds = int(getattr(mode, "remaining_seconds", config.DUO_MATCH_SECONDS)) % 60
+        labels = [
+            ("Mode", "LAN Battle"),
+            ("You", getattr(mode, "player_label", "Not connected")),
+            ("P1 Score", str(mode.green.score if mode else 0)),
+            ("P2 Score", str(mode.blue.score if mode else 0)),
+            ("Time Left", f"{minutes}:{seconds:02d}"),
+            ("Connection", getattr(mode, "connection_label", "Offline")),
+        ]
+        self._draw_stat_box(y, labels, height=int(220 * config.LAYOUT_SCALE))
+        if mode and mode.big_food:
+            remain = self.font_tiny.render(
+                f"Big apple {mode.big_food.remaining(now):.1f}s",
+                True,
+                config.COLOR_WARNING,
+            )
+            self.screen.blit(remain, (int(38 * config.LAYOUT_SCALE), y + int(194 * config.LAYOUT_SCALE)))
+
     def _draw_stat_row(self, panel: pygame.Rect, y: int, label: str, value: str) -> None:
         ltxt = self.font_small.render(label, True, config.COLOR_TEXT_MUTED)
         vtxt = self.font_small.render(value, True, config.COLOR_ACCENT)
@@ -482,9 +508,11 @@ class GameUI:
             pygame.draw.rect(self.screen, config.COLOR_SUCCESS, fill_rect, border_radius=radius)
         pygame.draw.rect(self.screen, (82, 90, 114), rect, 2, border_radius=radius)
 
-    def _draw_stat_box(self, y: int, labels: list[tuple[str, str]], height: int = 150) -> None:
+    def _draw_stat_box(self, y: int, labels: list[tuple[str, str]], height: Optional[int] = None) -> None:
         margin = int(20 * config.LAYOUT_SCALE)
         row_gap = int(31 * config.LAYOUT_SCALE)
+        if height is None:
+            height = int(150 * config.LAYOUT_SCALE)
         pygame.draw.rect(
             self.screen,
             config.COLOR_PANEL,
@@ -528,6 +556,17 @@ class GameUI:
             "Edges wrap, obstacles are deadly",
             "Head hits end the match",
             "Timer pauses when tracking fails",
+        ]
+        self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
+
+    def draw_lan_duo_help_text(self) -> None:
+        lines = [
+            "LAN Battle",
+            "Host runs the match",
+            "Join sends local hand input",
+            "No camera video is sent",
+            "Classic map in this version",
+            "Allow Python through firewall",
         ]
         self._draw_help_lines(lines, y=config.WINDOW_HEIGHT - int(175 * config.LAYOUT_SCALE))
 
@@ -591,6 +630,62 @@ class GameUI:
         for _, button in back_buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
 
+    def draw_lan_duo_menu(self, buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_title.render("LAN Battle", True, config.COLOR_TEXT)
+        sub = self.font_med.render("Host or join a local network match", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.17))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.26))))
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_lan_duo_host(self, mode, buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_big.render("Hosting LAN Battle", True, config.COLOR_TEXT)
+        lines = [
+            f"IP: {mode.host_ip}",
+            f"Port: {mode.server.port if mode.server else config.LAN_DEFAULT_PORT}",
+            "Waiting for Player 2..." if not mode.can_start_match() else "Player 2 connected",
+            mode.error_message or mode.info_message or "Start when both players are connected",
+        ]
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.16))))
+        for i, line in enumerate(lines):
+            color = config.COLOR_DANGER if i == 3 and mode.error_message else config.COLOR_TEXT_MUTED
+            text = self.font_med.render(line, True, color)
+            self.screen.blit(text, text.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.27) + i * int(42 * config.LAYOUT_SCALE))))
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_lan_duo_join(self, mode, buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_big.render("Join LAN Battle", True, config.COLOR_TEXT)
+        label = self.font_med.render("Host IP:", True, config.COLOR_TEXT_MUTED)
+        input_rect = pygame.Rect(0, 0, int(430 * config.LAYOUT_SCALE), int(62 * config.LAYOUT_SCALE))
+        input_rect.center = (center_x, int(config.WINDOW_HEIGHT * 0.40))
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.17))))
+        self.screen.blit(label, label.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.30))))
+        pygame.draw.rect(self.screen, config.COLOR_PANEL, input_rect, border_radius=8)
+        pygame.draw.rect(self.screen, config.COLOR_ACCENT, input_rect, 2, border_radius=8)
+        value = mode.join_ip or "192.168.1.100"
+        value_color = config.COLOR_TEXT if mode.join_ip else config.COLOR_TEXT_MUTED
+        text = self.font_med.render(value, True, value_color)
+        self.screen.blit(text, text.get_rect(center=input_rect.center))
+        message = mode.error_message or mode.info_message or "Enter the host IP and press Enter"
+        color = config.COLOR_DANGER if mode.error_message else config.COLOR_TEXT_MUTED
+        msg = self.font_small.render(message, True, color)
+        self.screen.blit(msg, msg.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.49))))
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_lan_duo_waiting(self, mode, buttons, cursor_pos, mouse_pos) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        title = self.font_big.render(f"Connected as {mode.player_label}", True, config.COLOR_SUCCESS)
+        sub = self.font_med.render("Waiting for host to start...", True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(title, title.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.24))))
+        self.screen.blit(sub, sub.get_rect(center=(center_x, int(config.WINDOW_HEIGHT * 0.34))))
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
     def draw_options(self, buttons, cursor_pos, mouse_pos, sensitivity_label: str) -> None:
         center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
         title = self.font_big.render("Options", True, config.COLOR_TEXT)
@@ -621,27 +716,142 @@ class GameUI:
         title = "Game Over"
         if mode_name == "level":
             subtitle = f"Reached Level {mode.display_level_number}"
-            stats = f"Total Score {mode.total_score}"
             hint_text = "Restart the current level or return to menu."
         elif mode_name == "single_challenge":
-            subtitle = f"{mode.challenge_name} Score {mode.score}"
-            stats = f"Apples {mode.apples_eaten}"
+            subtitle = mode.challenge_name
             hint_text = "Restart, choose another challenge, or return to menu."
         elif mode_name == "duo":
             title = "Duo Result"
             subtitle = mode.result_label
-            stats = f"Green {mode.green.score}  Blue {mode.blue.score}"
             hint_text = "Restart, choose another map, or return to menu."
         else:
-            subtitle = f"Score {mode.score}"
-            stats = f"Apples {mode.apples_eaten}"
+            subtitle = "Run Summary"
             hint_text = "Use the peace sign or press Restart."
-        self.draw_overlay_panel(title, [subtitle, stats, hint_text], config.COLOR_DANGER)
-        hint = self.font_small.render("", True, config.COLOR_TEXT_MUTED)
-        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
-        self.screen.blit(hint, hint.get_rect(center=(center_x, 0)))
+        self.draw_summary_dashboard(
+            title,
+            subtitle,
+            self.summary_items_for(mode_name, mode),
+            hint_text,
+            config.COLOR_DANGER,
+        )
         for _, button in buttons:
             button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def draw_lan_duo_gameover(self, mode, buttons, cursor_pos, mouse_pos) -> None:
+        title = "Connection Lost" if mode.connection_lost else "Game Over"
+        subtitle = mode.result_label if mode else "Game Over"
+        if mode and mode.error_message:
+            hint_text = mode.error_message
+        elif mode and mode.connection_lost and mode.pause_reason:
+            hint_text = mode.pause_reason
+        else:
+            hint_text = "Return to the LAN menu."
+        self.draw_summary_dashboard(
+            title,
+            subtitle,
+            self.summary_items_for("lan_duo", mode),
+            hint_text,
+            config.COLOR_DANGER,
+        )
+        for _, button in buttons:
+            button.draw(self.screen, self.font_button, self.font_small, cursor_pos, mouse_pos)
+
+    def summary_items_for(self, mode_name: str, mode) -> list[tuple[str, str]]:
+        summary = getattr(mode, "summary", None)
+        if isinstance(summary, dict):
+            time_label = str(summary.get("time", "0:00"))
+            apples = str(summary.get("apples", 0))
+            big_apples = str(summary.get("big_apples", 0))
+            max_speed = int(summary.get("max_speed", 0))
+            tracking = str(summary.get("tracking", "0%"))
+        elif summary is not None:
+            time_label = summary.elapsed_label()
+            apples = str(getattr(mode, "apples_eaten", 0))
+            big_apples = str(summary.big_apples_eaten)
+            max_speed = summary.max_speed
+            tracking = summary.stability_label()
+        else:
+            time_label = "0:00"
+            apples = str(getattr(mode, "apples_eaten", 0))
+            big_apples = "0"
+            max_speed = int(getattr(mode, "current_speed", 0))
+            tracking = "0%"
+
+        if mode_name == "level":
+            score_item = ("Score", str(getattr(mode, "total_score", 0)))
+        elif mode_name == "duo":
+            score_item = ("Result", getattr(mode, "result_label", "Draw"))
+            apples = str(getattr(mode, "apples_eaten", apples))
+        elif mode_name == "lan_duo":
+            score_item = (
+                "Result",
+                f"P1 {mode.green.score if mode else 0} / P2 {mode.blue.score if mode else 0}",
+            )
+        else:
+            score_item = ("Score", str(getattr(mode, "score", 0)))
+
+        return [
+            score_item,
+            ("Apples", apples),
+            ("Big Apples", big_apples),
+            ("Time", time_label),
+            ("Max Speed", f"{max_speed} px/s"),
+            ("Tracking", tracking),
+        ]
+
+    def draw_summary_dashboard(
+        self,
+        title: str,
+        subtitle: str,
+        items: list[tuple[str, str]],
+        hint_text: str,
+        color: tuple[int, int, int],
+    ) -> None:
+        center_x = config.SIDEBAR_WIDTH + config.GAME_WIDTH // 2
+        dim = pygame.Surface((config.GAME_WIDTH, config.WINDOW_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 175))
+        self.screen.blit(dim, (config.SIDEBAR_WIDTH, 0))
+
+        box_w = min(int(780 * config.LAYOUT_SCALE), config.GAME_WIDTH - int(100 * config.LAYOUT_SCALE))
+        box_h = min(int(390 * config.LAYOUT_SCALE), config.WINDOW_HEIGHT - int(150 * config.LAYOUT_SCALE))
+        box = pygame.Rect(0, 0, box_w, box_h)
+        box.center = (center_x, int(config.WINDOW_HEIGHT * 0.38))
+        overlay = pygame.Surface(box.size, pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 255))
+        self.screen.blit(overlay, box.topleft)
+        pygame.draw.rect(self.screen, color, box, 2, border_radius=8)
+
+        title_surf = self.font_big.render(title, True, color)
+        subtitle_surf = self.font_small.render(subtitle, True, config.COLOR_TEXT)
+        self.screen.blit(title_surf, title_surf.get_rect(center=(center_x, box.y + int(48 * config.LAYOUT_SCALE))))
+        self.screen.blit(
+            subtitle_surf,
+            subtitle_surf.get_rect(center=(center_x, box.y + int(84 * config.LAYOUT_SCALE))),
+        )
+
+        card_gap = int(14 * config.LAYOUT_SCALE)
+        card_w = (box.width - int(80 * config.LAYOUT_SCALE) - card_gap) // 2
+        card_h = int(58 * config.LAYOUT_SCALE)
+        grid_x = box.x + int(40 * config.LAYOUT_SCALE)
+        grid_y = box.y + int(114 * config.LAYOUT_SCALE)
+        for index, (label, value) in enumerate(items):
+            row = index // 2
+            col = index % 2
+            card = pygame.Rect(
+                grid_x + col * (card_w + card_gap),
+                grid_y + row * (card_h + int(10 * config.LAYOUT_SCALE)),
+                card_w,
+                card_h,
+            )
+            pygame.draw.rect(self.screen, config.COLOR_PANEL, card, border_radius=8)
+            pygame.draw.rect(self.screen, (70, 80, 104), card, 1, border_radius=8)
+            label_surf = self.font_tiny.render(label, True, config.COLOR_TEXT_MUTED)
+            value_surf = self.font_small.render(value, True, config.COLOR_ACCENT)
+            self.screen.blit(label_surf, (card.x + int(16 * config.LAYOUT_SCALE), card.y + int(8 * config.LAYOUT_SCALE)))
+            self.screen.blit(value_surf, (card.x + int(16 * config.LAYOUT_SCALE), card.y + int(29 * config.LAYOUT_SCALE)))
+
+        hint = self.font_tiny.render(hint_text, True, config.COLOR_TEXT_MUTED)
+        self.screen.blit(hint, hint.get_rect(center=(center_x, box.bottom - int(28 * config.LAYOUT_SCALE))))
 
     def draw_level_clear(self, mode) -> None:
         self.draw_overlay_panel(
